@@ -1,5 +1,6 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { Analytics } from '@vercel/analytics/react'
 import './index.css'
 import App from './App.tsx'
 import { createCVStore, CVStoreProvider } from './store'
@@ -22,6 +23,7 @@ createRoot(document.getElementById('root')!).render(
     <CVStoreProvider store={store}>
       <EditorProvider>
         <App />
+        <Analytics />
       </EditorProvider>
     </CVStoreProvider>
   </StrictMode>,
