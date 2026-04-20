@@ -2,7 +2,9 @@
 
 <div align="center">
 
-![SiraStudio Logo](./cv-maker/public/Logo.png)
+<div style="background:#fff; display:inline-block; padding:12px; border-radius:8px;">
+  <img src="./cv-maker/public/Logo.png" alt="SiraStudio Logo" />
+</div>
 
 <p>
   <strong>Build polished CVs with a fast, flexible, and modern editor</strong>
