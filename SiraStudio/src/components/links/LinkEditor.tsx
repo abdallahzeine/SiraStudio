@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import type { SocialLink, IconType } from '../../types';
 import { IconSelector } from './IconSelector';
 import { validateUrl, extractDomain } from '../../utils/linkValidation';
@@ -121,8 +122,8 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
     }));
   };
 
-  return (
-    <div 
+  return createPortal(
+    <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
@@ -322,6 +323,7 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
           </div>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

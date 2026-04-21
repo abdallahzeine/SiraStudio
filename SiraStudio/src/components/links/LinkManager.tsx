@@ -101,9 +101,25 @@ export function LinkManager({
     } else {
       onAdd(normalizedLink);
     }
+    setIsEditorOpen(false);
+  };
+
+  const handleCloseEditor = () => {
+    setIsEditorOpen(false);
+    setEditingLink(null);
   };
 
   const sortedLinks = links;
+
+  const linkCards = sortedLinks.map((link) => (
+    <LinkCard
+      key={link.id}
+      link={link}
+      onEdit={() => handleEditLink(link)}
+      onDelete={() => handleDeleteLink(link.id)}
+      layout={layout}
+    />
+  ));
 
   // Compact layout (for header)
   if (layout === 'compact') {
@@ -121,16 +137,8 @@ export function LinkManager({
               strategy={horizontalListSortingStrategy}
             >
               <div className="flex flex-wrap items-center justify-center gap-2">
-                {sortedLinks.map((link) => (
-                  <LinkCard
-                    key={link.id}
-                    link={link}
-                    onEdit={() => handleEditLink(link)}
-                    onDelete={() => handleDeleteLink(link.id)}
-                    layout="compact"
-                  />
-                ))}
-                
+                {linkCards}
+
                 {/* Add button */}
                 <button
                   onClick={handleAddLink}
@@ -163,18 +171,18 @@ export function LinkManager({
                 style={{ color: 'black !important' }}
               >
                 {link.iconType === 'custom' && link.customIconUrl ? (
-                  <img 
-                    src={link.customIconUrl} 
-                    alt="" 
+                  <img
+                    src={link.customIconUrl}
+                    alt=""
                     className="print:w-4 print:h-4"
                   />
                 ) : (
-                  <span 
+                  <span
                     className="print:w-4 print:h-4"
                     style={{ color: iconColor }}
-                    dangerouslySetInnerHTML={{ 
+                    dangerouslySetInnerHTML={{
                       __html: iconDef.svg.replace('class="w-5 h-5"', 'width="16" height="16"')
-                    }} 
+                    }}
                   />
                 )}
                 <span style={{ color: 'black' }}>{link.label}</span>
@@ -185,7 +193,7 @@ export function LinkManager({
 
         {isEditorOpen && (
           <LinkEditor
-            onClose={() => setIsEditorOpen(false)}
+            onClose={handleCloseEditor}
             onSave={handleSaveLink}
             link={editingLink}
           />
@@ -216,16 +224,8 @@ export function LinkManager({
             strategy={rectSortingStrategy}
           >
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-              {sortedLinks.map((link) => (
-                <LinkCard
-                  key={link.id}
-                  link={link}
-                  onEdit={() => handleEditLink(link)}
-                  onDelete={() => handleDeleteLink(link.id)}
-                  layout="grid"
-                />
-              ))}
-              
+              {linkCards}
+
               {/* Add button */}
               <button
                 onClick={handleAddLink}
@@ -246,7 +246,7 @@ export function LinkManager({
 
         {isEditorOpen && (
           <LinkEditor
-            onClose={() => setIsEditorOpen(false)}
+            onClose={handleCloseEditor}
             onSave={handleSaveLink}
             link={editingLink}
           />
@@ -276,16 +276,8 @@ export function LinkManager({
           strategy={rectSortingStrategy}
         >
           <div className="space-y-2">
-            {sortedLinks.map((link) => (
-              <LinkCard
-                key={link.id}
-                link={link}
-                onEdit={() => handleEditLink(link)}
-                onDelete={() => handleDeleteLink(link.id)}
-                layout="list"
-              />
-            ))}
-            
+            {linkCards}
+
             {/* Add button */}
             <button
               onClick={handleAddLink}
@@ -306,7 +298,7 @@ export function LinkManager({
 
       {isEditorOpen && (
         <LinkEditor
-          onClose={() => setIsEditorOpen(false)}
+          onClose={handleCloseEditor}
           onSave={handleSaveLink}
           link={editingLink}
         />
