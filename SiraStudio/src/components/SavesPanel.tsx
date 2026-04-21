@@ -6,6 +6,7 @@ interface SavesPanelProps {
   currentCVData: CVData;
   onLoadSnapshot: (data: CVData) => void;
   onLoadBlank: () => void;
+  onShowTutorial?: () => void;
 }
 
 function suggestedNameFor(cv: CVData): string {
@@ -13,7 +14,7 @@ function suggestedNameFor(cv: CVData): string {
   return trimmed || 'My CV';
 }
 
-export function SavesPanel({ currentCVData, onLoadSnapshot, onLoadBlank }: SavesPanelProps) {
+export function SavesPanel({ currentCVData, onLoadSnapshot, onLoadBlank, onShowTutorial }: SavesPanelProps) {
   const suggestedName = suggestedNameFor(currentCVData);
   const [snapshots, setSnapshots] = useState<CVSnapshot[]>(() => loadSnapshots());
   const [saveName, setSaveName] = useState(suggestedName);
@@ -85,6 +86,14 @@ export function SavesPanel({ currentCVData, onLoadSnapshot, onLoadBlank }: Saves
             Save
           </button>
         </div>
+        {onShowTutorial && (
+          <button
+            onClick={onShowTutorial}
+            className="text-xs text-violet-600 hover:text-violet-700 underline underline-offset-2"
+          >
+            Want to see how to save as PDF?
+          </button>
+        )}
       </section>
 
       <div className="h-px bg-gray-200" />

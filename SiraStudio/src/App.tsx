@@ -1,6 +1,8 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { CVData, CVSection } from './types';
 import { Toolbar, SectionModal, SavesPanel, ConfirmModal, SplashScreen } from './components';
+import { PrintTutorialModal } from './components/PrintTutorialModal.tsx';
+import { hasSeenPrintTutorial, markPrintTutorialSeen } from './utils/printTutorial.ts';
 import { SidePanel } from './components/SidePanel';
 import { SectionLayoutContent } from './components/SectionLayoutPanel';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -28,6 +30,8 @@ export default function App() {
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [panelWidth, setPanelWidth] = useState(loadSidePanelWidth);
   const [confirmModal, setConfirmModal] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  const [showPrintTutorial, setShowPrintTutorial] = useState(false);
+  const [printAfterTutorial, setPrintAfterTutorial] = useState(false);
 
   const openConfirm = (message: string, action: () => void) =>
     setConfirmModal({ message, onConfirm: action });
@@ -110,7 +114,26 @@ export default function App() {
 
   const handlePrint = () => {
     setPanel(null);
+    if (!hasSeenPrintTutorial()) {
+      setPrintAfterTutorial(true);
+      setShowPrintTutorial(true);
+      return;
+    }
     setTimeout(() => window.print(), 300);
+  };
+
+  const handleTutorialClose = () => {
+    markPrintTutorialSeen();
+    setShowPrintTutorial(false);
+    if (printAfterTutorial) {
+      setTimeout(() => window.print(), 300);
+    }
+    setPrintAfterTutorial(false);
+  };
+
+  const handleShowTutorial = () => {
+    setPrintAfterTutorial(false);
+    setShowPrintTutorial(true);
   };
 
   const handleReset = () => {
@@ -176,6 +199,9 @@ export default function App() {
           onCancel={closeConfirm}
         />
       )}
+      {showPrintTutorial && (
+        <PrintTutorialModal onClose={handleTutorialClose} />
+      )}
       <SidePanel
         open={panelOpen}
         onClose={closePanel}
@@ -189,6 +215,7 @@ export default function App() {
             currentCVData={cv}
             onLoadSnapshot={handleLoadSnapshot}
             onLoadBlank={handleLoadBlank}
+            onShowTutorial={handleShowTutorial}
           />
         )}
         {panel?.type === 'layout-settings' && panel.sectionId != null && (() => {
