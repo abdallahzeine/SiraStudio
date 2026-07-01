@@ -22,6 +22,28 @@ interface PanelState {
   sectionId?: string;
 }
 
+function useUndoRedoShortcuts(dispatch: ReturnType<typeof useDispatch>, history: ReturnType<typeof useHistory>) {
+  useUndoRedoShortcuts(dispatch, history);
+}
+
+function usePendingSectionScroll(pendingScrollId: string | null, setPendingScrollId: (id: string | null) => void) {
+  useEffect(() => {
+    if (!pendingScrollId) return;
+    const timer = setTimeout(() => {
+      document.getElementById(`section-${pendingScrollId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setPendingScrollId(null);
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [pendingScrollId, setPendingScrollId]);
+}
+
+function getPanelTitle(panel: PanelState | null): string {
+  if (panel?.type === 'layout-settings') return 'Layout Settings';
+  if (panel?.type === 'saves') return 'Saved CVs';
+  if (panel?.type === 'agent') return 'AI Assistant';
+  return '';
+}
+
 export default function App() {
   const cv = useCVSelector((s) => s.data);
   const revision = useCVSelector((s) => s.revision);
@@ -44,70 +66,11 @@ export default function App() {
     setConfirmModal({ message, onConfirm: action });
   const closeConfirm = () => setConfirmModal(null);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const key = event.key.toLowerCase();
-      const hasCommandModifier = event.ctrlKey || event.metaKey;
-      if (!hasCommandModifier || event.altKey) {
-        return;
-      }
-
-      const isUndo = key === 'z' && !event.shiftKey;
-      const isRedo = (key === 'z' && event.shiftKey) || key === 'y';
-
-      if (isUndo) {
-        const entry = history.undo();
-        if (!entry) {
-          return;
-        }
-
-        event.preventDefault();
-        const result = dispatch(entry.inverse, {
-          origin: 'undo',
-          label: 'history:undo',
-        });
-
-        if (!result.success) {
-          history.redo();
-        }
-
-        return;
-      }
-
-      if (isRedo) {
-        const entry = history.redo();
-        if (!entry) {
-          return;
-        }
-
-        event.preventDefault();
-        const result = dispatch(entry.patches, {
-          origin: 'redo',
-          label: 'history:redo',
-        });
-
-        if (!result.success) {
-          history.undo();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [dispatch, history]);
+  useUndoRedoShortcuts(dispatch, history);
 
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!pendingScrollId) return;
-    const timer = setTimeout(() => {
-      document.getElementById(`section-${pendingScrollId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      setPendingScrollId(null);
-    }, 50);
-    return () => clearTimeout(timer);
-  }, [pendingScrollId]);
+  usePendingSectionScroll(pendingScrollId, setPendingScrollId);
 
   const addSection = useCallback((section: CVSection) => {
     dispatch({ op: 'insert', path: 'sections[-1]', value: section });
@@ -230,7 +193,7 @@ export default function App() {
         onClose={closePanel}
         width={panelWidth}
         onWidthChange={handlePanelWidthChange}
-        title={panel?.type === 'layout-settings' ? 'Layout Settings' : panel?.type === 'saves' ? 'Saved CVs' : panel?.type === 'agent' ? 'AI Assistant' : ''}
+        title={getPanelTitle(panel)}
         subtitle={panel?.type === 'layout-settings' && panel.sectionId != null ? (() => { const s = cv.sections.find((x) => x.id === panel.sectionId); return s ? `${(sectionRegistry[s.type] ?? sectionRegistry.custom).label} · ${s.title}` : undefined; })() : undefined}
         hideHeader={panel?.type === 'agent'}
         bodyClassName={panel?.type === 'agent' ? 'flex min-h-0 flex-col overflow-hidden !px-0 !py-0' : undefined}

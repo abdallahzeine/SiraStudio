@@ -3,7 +3,7 @@ import type { StructuredDate, DateFormat } from '../types';
 const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
-export function formatStructuredDate(d: StructuredDate, fmt: DateFormat): string {
+function formatStructuredDate(d: StructuredDate, fmt: DateFormat): string {
   if (fmt === 'YYYY') return String(d.year);
   if (fmt === 'Mon YYYY') {
     const mon = d.month != null ? MONTH_ABBR[d.month - 1] + ' ' : '';

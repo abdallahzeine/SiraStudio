@@ -122,10 +122,3 @@ export function saveCVData(doc: CVDocument): void {
   }
 }
 
-export function clearCVData(): void {
-  try {
-    localStorage.removeItem(CV_KEY);
-  } catch (error) {
-    console.error('Failed to clear CV data:', error);
-  }
-}

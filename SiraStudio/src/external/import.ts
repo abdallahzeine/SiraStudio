@@ -19,7 +19,7 @@ function parseRawJSON(raw: unknown): unknown {
   return raw;
 }
 
-export function dispatchImportedCVData(
+function dispatchImportedCVData(
   store: Pick<StoreAPI, 'getSnapshot' | 'dispatch'>,
   nextData: CVData,
   fmt: ExternalImportFormat

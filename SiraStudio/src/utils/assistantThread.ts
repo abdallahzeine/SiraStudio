@@ -19,10 +19,4 @@ export function setCurrentAssistantThreadId(threadId: string): void {
   localStorage.setItem(ASSISTANT_THREAD_KEY, threadId);
 }
 
-export function resetAssistantThreadId(): string {
-  const threadId = createLocalAssistantThreadId();
-  setCurrentAssistantThreadId(threadId);
-  return threadId;
-}
 
-export const getAssistantThreadId = getCurrentAssistantThreadId;

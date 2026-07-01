@@ -92,13 +92,6 @@ export interface SectionLayout {
   columns: 1 | 2;
 }
 
-export interface SectionPreset {
-  id: string;
-  label: string;
-  appliesTo: SectionType[] | '*';
-  layout: SectionLayout;
-}
-
 // ─── Custom section field schema ─────────────────────────────────────────────
 
 export type CustomFieldKind = 'text' | 'multiline' | 'date' | 'bullets' | 'pairs';

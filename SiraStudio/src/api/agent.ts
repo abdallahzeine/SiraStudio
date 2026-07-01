@@ -87,10 +87,6 @@ async function createEditJob(cv: CVData, message: string, threadId: string, opti
   return data.job_id;
 }
 
-export async function getJob(jobId: string, signal?: AbortSignal): Promise<AgentJobStatusResponse> {
-  return fetchJson<AgentJobStatusResponse>(`/api/agent/jobs/${encodeURIComponent(jobId)}`, { signal });
-}
-
 function createEventQueue<T>() {
   const values: T[] = [];
   const waiters: Array<(value: IteratorResult<T>) => void> = [];
@@ -245,15 +241,3 @@ function completedJobToEditResponse(job: AgentJobStatusResponse): AgentEditResul
   };
 }
 
-export async function editCV(cv: CVData, message: string, threadId: string, options: EditCVOptions = {}): Promise<AgentEditResult> {
-  let result: AgentEditResult | null = null;
-  for await (const event of editCVEvents(cv, message, threadId, options)) {
-    if (event.type === 'done') {
-      result = event.result;
-    }
-  }
-  if (!result) {
-    throw new Error('Agent completed without returning a result.');
-  }
-  return result;
-}

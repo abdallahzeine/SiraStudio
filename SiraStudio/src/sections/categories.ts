@@ -42,15 +42,3 @@ export const sectionCategories: CategoryDef[] = [
   },
 ];
 
-export const categoryByType: Record<SectionType, SectionCategory> = {
-  'work-experience': 'work-experience',
-  education: 'heading-date',
-  certifications: 'heading-date',
-  awards: 'heading-date',
-  volunteering: 'heading-date',
-  summary: 'body-text',
-  skills: 'body-text',
-  projects: 'title-bullets',
-  custom: 'custom',
-  spacer: 'spacer',
-};

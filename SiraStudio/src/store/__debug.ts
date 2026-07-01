@@ -299,7 +299,7 @@ function verifyDiffNoOp(base: CVData): VerificationResult {
   };
 }
 
-export function runPatchEngineVerification(): boolean {
+function runPatchEngineVerification(): boolean {
   const baseline = cloneCVData(initialCVData);
 
   const results: VerificationResult[] = [
@@ -322,7 +322,7 @@ export function runPatchEngineVerification(): boolean {
   return results.every((result) => result.passed);
 }
 
-export function runDiffEngineVerification(): boolean {
+function runDiffEngineVerification(): boolean {
   const baseline = cloneCVData(initialCVData);
 
   const results: VerificationResult[] = [verifyDiffNoOp(baseline), verifyDiffRoundTrip(baseline)];

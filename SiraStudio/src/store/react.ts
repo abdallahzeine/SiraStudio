@@ -2,7 +2,6 @@ import { useContext, useEffect, useReducer, useRef, useSyncExternalStore } from 
 import { CVStoreContext } from './storeContext';
 import { shallowEqual } from './shallowEqual';
 import type {
-  CVDocument,
   CVSelector,
   StoreAPI,
 } from './types';
@@ -12,16 +11,6 @@ const HIGHLIGHT_DURATION = 1500;
 type SelectorCache<T> =
   | { hasValue: false }
   | { hasValue: true; value: T };
-
-export function useCVStore(): CVDocument {
-  const store = useContext(CVStoreContext);
-
-  if (!store) {
-    throw new Error('useCVStore outside CVStoreProvider');
-  }
-
-  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
-}
 
 export function useCVSelector<T>(selector: CVSelector<T>): T {
   const store = useContext(CVStoreContext);

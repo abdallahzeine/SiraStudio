@@ -17,7 +17,7 @@ from .agent import (
     ThreadSummaryResponse,
 )
 
-from .agent.llm import LM_STUDIO_BASE_URL
+from .agent.llm import OPENROUTER_API_KEY
 from .jobs import (
     archive_thread,
     create_job,
@@ -216,6 +216,6 @@ def health(request):
         "status": "ok",
         "jobs_db": jobs_db_available(),
         "executor": executor_available(),
-        "model_base_url_configured": bool(LM_STUDIO_BASE_URL),
+        "openrouter_api_key_configured": bool(OPENROUTER_API_KEY),
         "store_mode": os.getenv("CV_MAKER_STORE", "memory"),
     }

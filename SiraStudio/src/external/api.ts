@@ -655,7 +655,7 @@ function normalizePatchInput(patch: Patch | Patch[]): Patch[] {
   return Array.isArray(patch) ? patch : [patch];
 }
 
-export function createExternalAPI(store: StoreAPI): CVMakerExternalAPI {
+function createExternalAPI(store: StoreAPI): CVMakerExternalAPI {
   const api: CVMakerExternalAPI = {
     schemaVersion: EXTERNAL_SCHEMA_VERSION,
     getSnapshot: () => {

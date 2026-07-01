@@ -9,7 +9,7 @@ export interface CVSnapshot {
   data: CVData;
 }
 
-export const SNAPSHOTS_STORAGE_KEY = 'cv-maker-snapshots';
+const SNAPSHOTS_STORAGE_KEY = 'cv-maker-snapshots';
 
 const SNAPSHOT_SCHEMA_VERSION = 1 as const;
 const MAX_SNAPSHOTS = 20;

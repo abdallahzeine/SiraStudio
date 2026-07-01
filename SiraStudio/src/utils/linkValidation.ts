@@ -130,6 +130,3 @@ export const extractDomain = (url: string): string => {
   }
 };
 
-export const isValidUrl = (input: string): boolean => {
-  return validateUrl(input).isValid;
-};
