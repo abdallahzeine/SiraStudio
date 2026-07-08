@@ -7,7 +7,6 @@ import { useFocusedEditor } from '../editor/focusedEditorContext';
 interface ToolbarProps {
   onReset: () => void;
   onPrint: () => void;
-  onAddSection: () => void;
   onOpenSaves: () => void;
   onOpenAI: () => void;
   panelOffsetX?: number;
@@ -16,7 +15,6 @@ interface ToolbarProps {
 export function Toolbar({
   onReset,
   onPrint,
-  onAddSection,
   onOpenSaves,
   onOpenAI,
   panelOffsetX = 0,
@@ -65,13 +63,6 @@ export function Toolbar({
           <path fillRule="evenodd" d="M5 4v3H4a2 2 0 00-2 2v3a2 2 0 002 2h1v2a1 1 0 001 1h8a1 1 0 001-1v-2h1a2 2 0 002-2V9a2 2 0 00-2-2h-1V4a1 1 0 00-1-1H6a1 1 0 00-1 1zm2 0h6v3H7V4zm-1 9h8v3H6v-3zm8-4a1 1 0 110 2 1 1 0 010-2z" clipRule="evenodd" />
         </svg>
         <span className="hidden sm:inline">Print</span>
-      </button>
-      <button onClick={onAddSection}
-        className="toolbar-btn h-10 sm:h-auto px-3 py-1.5 text-sm rounded-xl bg-violet-100 text-violet-700 hover:bg-violet-200 transition-colors shadow-sm flex items-center gap-1">
-        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-        </svg>
-        <span className="hidden sm:inline">Add Section</span>
       </button>
       <button onClick={onOpenSaves}
         className="toolbar-btn h-10 sm:h-auto px-3 py-1.5 text-sm rounded-xl border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition-colors shadow-sm flex items-center gap-1.5">
