@@ -9,6 +9,101 @@ from django.test import Client, TestCase
 from . import jobs
 
 
+class CVDocumentApiTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+
+    def test_cv_document_crud_revision_conflict_and_archive(self):
+        create = self.client.post(
+            "/api/cv-documents",
+            data=json.dumps(
+                {
+                    "title": "Ada CV",
+                    "cv": self._cv(template="classic"),
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(create.status_code, 201)
+        created = create.json()
+        document_id = created["id"]
+        self.assertEqual(created["title"], "Ada CV")
+        self.assertEqual(created["revision"], 1)
+        self.assertEqual(created["cv"]["template"], "classic")
+
+        listed = self.client.get("/api/cv-documents")
+        self.assertEqual(listed.status_code, 200)
+        self.assertTrue(any(item["id"] == document_id for item in listed.json()["documents"]))
+
+        retrieved = self.client.get(f"/api/cv-documents/{document_id}")
+        self.assertEqual(retrieved.status_code, 200)
+        self.assertEqual(retrieved.json()["id"], document_id)
+
+        update = self.client.put(
+            f"/api/cv-documents/{document_id}",
+            data=json.dumps(
+                {
+                    "title": "Ada Updated CV",
+                    "cv": self._cv(template="modern"),
+                    "base_revision": 1,
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(update.status_code, 200)
+        updated = update.json()
+        self.assertEqual(updated["title"], "Ada Updated CV")
+        self.assertEqual(updated["revision"], 2)
+        self.assertEqual(updated["cv"]["template"], "modern")
+
+        conflict = self.client.put(
+            f"/api/cv-documents/{document_id}",
+            data=json.dumps(
+                {
+                    "cv": self._cv(template="compact"),
+                    "base_revision": 1,
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(conflict.status_code, 409)
+        self.assertIn("Revision conflict", conflict.json()["detail"])
+
+        deleted = self.client.delete(f"/api/cv-documents/{document_id}")
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(deleted.json()["id"], document_id)
+
+        listed_after_delete = self.client.get("/api/cv-documents")
+        self.assertEqual(listed_after_delete.status_code, 200)
+        self.assertFalse(any(item["id"] == document_id for item in listed_after_delete.json()["documents"]))
+
+        retrieved_after_delete = self.client.get(f"/api/cv-documents/{document_id}")
+        self.assertEqual(retrieved_after_delete.status_code, 404)
+
+    def test_cv_document_create_requires_shallow_cv_shape(self):
+        cases = [
+            {"cv": ["not", "an", "object"]},
+            {"cv": {"header": {}, "sections": []}},
+            {"cv": {"header": {}, "sections": {}, "template": "classic"}},
+        ]
+
+        for body in cases:
+            with self.subTest(body=body):
+                response = self.client.post(
+                    "/api/cv-documents",
+                    data=json.dumps(body),
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 422)
+
+    def _cv(self, template: str = "classic") -> dict:
+        return {
+            "header": {"name": "Ada Lovelace"},
+            "sections": [],
+            "template": template,
+        }
+
+
 class AgentBackendSmokeTests(TestCase):
     def setUp(self):
         self.client = Client()
