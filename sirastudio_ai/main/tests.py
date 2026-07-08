@@ -2,6 +2,7 @@ import json
 import tempfile
 import time
 from pathlib import Path
+from typing import Any, override
 from unittest.mock import patch
 
 from django.test import Client, TestCase
@@ -105,33 +106,43 @@ class CVDocumentApiTests(TestCase):
 
 
 class AgentBackendSmokeTests(TestCase):
-    def setUp(self):
+    client: Any = None
+    tmp: Any = None
+    old_db_path: Path = Path()
+
+    @override
+    def setUp(self) -> None:
         self.client = Client()
         self.tmp = tempfile.TemporaryDirectory()
-        self.old_db_path = jobs._DB_PATH
-        self.old_db_ready = jobs._DB_READY
-        jobs._DB_PATH = Path(self.tmp.name) / "agent-jobs.sqlite"
-        jobs._DB_READY = False
-        jobs._JOB_EVENTS.clear()
+        self.old_db_path = jobs.get_db_path()
+        jobs.set_db_path(Path(self.tmp.name) / "agent-jobs.sqlite")
+        jobs.reset_job_events()
 
-    def tearDown(self):
-        jobs._DB_PATH = self.old_db_path
-        jobs._DB_READY = self.old_db_ready
-        jobs._JOB_EVENTS.clear()
+    @override
+    def tearDown(self) -> None:
+        jobs.set_db_path(self.old_db_path)
+        jobs.reset_job_events()
         self.tmp.cleanup()
 
-    def test_agent_routes_job_and_sse_smoke(self):
-        def fake_run_agent(cv, message, thread_id, run_id=None, on_tool_event=None, **kwargs):
+    def test_agent_routes_job_and_sse_smoke(self) -> None:
+        def fake_run_agent(
+            cv: dict[str, Any],
+            message: str,
+            thread_id: str,
+            run_id: str | None = None,
+            on_tool_event: Any = None,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
             if on_tool_event:
                 on_tool_event({"id": "tool-1", "name": "read_cv", "status": "completed"})
             return {"cv": cv, "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
 
         with patch("main.jobs.run_agent", fake_run_agent):
-            health = self.client.get("/api/agent/health")
+            health: Any = self.client.get("/api/agent/health")
             self.assertEqual(health.status_code, 200)
             self.assertTrue(health.json()["jobs_db"])
 
-            thread = self.client.post(
+            thread: Any = self.client.post(
                 "/api/agent/threads",
                 data=json.dumps({"title": "Smoke"}),
                 content_type="application/json",
@@ -139,11 +150,11 @@ class AgentBackendSmokeTests(TestCase):
             self.assertEqual(thread.status_code, 200)
             thread_id = thread.json()["thread_id"]
 
-            listed = self.client.get("/api/agent/threads")
+            listed: Any = self.client.get("/api/agent/threads")
             self.assertEqual(listed.status_code, 200)
             self.assertTrue(any(item["thread_id"] == thread_id for item in listed.json()["threads"]))
 
-            edit = self.client.post(
+            edit: Any = self.client.post(
                 "/api/agent/edit",
                 data=json.dumps(
                     {
@@ -163,14 +174,14 @@ class AgentBackendSmokeTests(TestCase):
             self.assertEqual(status["reply"], "Done.")
             self.assertEqual(status["cv"], {"header": {}, "sections": []})
 
-            events = self.client.get(f"/api/agent/jobs/{job_id}/events")
+            events: Any = self.client.get(f"/api/agent/jobs/{job_id}/events")
             body = b"".join(events.streaming_content).decode("utf-8")
             self.assertIn("event: tool", body)
             self.assertIn("event: completed", body)
 
-    def _wait_for_job(self, job_id: str) -> dict:
+    def _wait_for_job(self, job_id: str) -> dict[str, Any]:
         for _ in range(40):
-            response = self.client.get(f"/api/agent/jobs/{job_id}")
+            response: Any = self.client.get(f"/api/agent/jobs/{job_id}")
             self.assertEqual(response.status_code, 200)
             payload = response.json()
             if payload["status"] in {"completed", "failed"}:

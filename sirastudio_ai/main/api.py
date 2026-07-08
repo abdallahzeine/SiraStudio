@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from typing import Any
 
 from django.http import StreamingHttpResponse
 from ninja import Router
@@ -33,13 +34,15 @@ from .jobs import (
     rename_thread,
 )
 
+JsonDict = dict[str, Any]
+
 router = Router()
 
 _SSE_TIMEOUT_SECONDS = 120
 _SSE_POLL_SECONDS = 0.8
 
 
-def _thread_response(record: dict) -> dict:
+def _thread_response(record: JsonDict) -> JsonDict:
     return {
         "thread_id": record.get("id"),
         "title": record.get("title"),
@@ -52,7 +55,7 @@ def _thread_response(record: dict) -> dict:
     }
 
 
-def _message_response(record: dict) -> dict:
+def _message_response(record: JsonDict) -> JsonDict:
     return {
         "id": record.get("id"),
         "thread_id": record.get("thread_id"),
@@ -67,7 +70,7 @@ def _message_response(record: dict) -> dict:
     }
 
 
-def _require_thread(thread_id: str) -> dict:
+def _require_thread(thread_id: str) -> JsonDict:
     if not thread_id.strip():
         raise HttpError(400, "thread_id is required")
     record = get_thread(thread_id)
@@ -76,7 +79,7 @@ def _require_thread(thread_id: str) -> dict:
     return record
 
 
-def _job_status_payload(job_id: str) -> dict:
+def _job_status_payload(job_id: str) -> JsonDict:
     record = get_job(job_id)
     if record is None:
         return {"job_id": job_id, "status": "failed", "error": "Job not found"}
@@ -106,12 +109,12 @@ def _job_status_payload(job_id: str) -> dict:
     }
 
 
-def _sse_event(event: str, data: dict) -> str:
+def _sse_event(event: str, data: JsonDict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 @router.post("/edit", response=JobCreateResponse, summary="Edit CV via AI agent")
-def edit_cv(request, body: EditRequest):
+def edit_cv(request, body: EditRequest) -> dict[str, str]:
     job_id = create_job(
         body.cv,
         body.message,
@@ -124,7 +127,7 @@ def edit_cv(request, body: EditRequest):
 
 
 @router.get("/threads", response=ThreadListResponse, summary="List assistant threads")
-def get_threads(request, limit: int = 50, status: str = "regular", user_id: str | None = None):
+def get_threads(request, limit: int = 50, status: str = "regular", user_id: str | None = None) -> dict[str, list[JsonDict]]:
     if status not in {"regular", "archived", "deleted"}:
         raise HttpError(400, "Invalid thread status")
     threads = [_thread_response(record) for record in list_threads(limit=limit, status=status, user_id=user_id)]
@@ -132,12 +135,12 @@ def get_threads(request, limit: int = 50, status: str = "regular", user_id: str 
 
 
 @router.post("/threads", response=ThreadSummaryResponse, summary="Create assistant thread")
-def post_thread(request, body: ThreadCreateRequest):
+def post_thread(request, body: ThreadCreateRequest) -> JsonDict:
     return _thread_response(create_thread(user_id=body.user_id, title=body.title))
 
 
 @router.get("/threads/{thread_id}", response=ThreadDetailResponse, summary="Get assistant thread")
-def get_thread_detail(request, thread_id: str, limit: int = 200):
+def get_thread_detail(request, thread_id: str, limit: int = 200) -> JsonDict:
     record = _require_thread(thread_id)
     response = _thread_response(record)
     response["messages"] = [_message_response(message) for message in list_thread_messages(thread_id, limit=limit)]
@@ -145,8 +148,8 @@ def get_thread_detail(request, thread_id: str, limit: int = 200):
 
 
 @router.patch("/threads/{thread_id}", response=ThreadSummaryResponse, summary="Rename assistant thread")
-def patch_thread(request, thread_id: str, body: ThreadRenameRequest):
-    _require_thread(thread_id)
+def patch_thread(request, thread_id: str, body: ThreadRenameRequest) -> JsonDict:
+    _ = _require_thread(thread_id)
     record = rename_thread(thread_id, body.title)
     if record is None:
         raise HttpError(404, "Thread not found")
@@ -154,8 +157,8 @@ def patch_thread(request, thread_id: str, body: ThreadRenameRequest):
 
 
 @router.post("/threads/{thread_id}/archive", response=ThreadSummaryResponse, summary="Archive assistant thread")
-def post_thread_archive(request, thread_id: str):
-    _require_thread(thread_id)
+def post_thread_archive(request, thread_id: str) -> JsonDict:
+    _ = _require_thread(thread_id)
     record = archive_thread(thread_id)
     if record is None:
         raise HttpError(404, "Thread not found")
@@ -163,8 +166,8 @@ def post_thread_archive(request, thread_id: str):
 
 
 @router.delete("/threads/{thread_id}", response=ThreadSummaryResponse, summary="Delete assistant thread")
-def remove_thread(request, thread_id: str):
-    _require_thread(thread_id)
+def remove_thread(request, thread_id: str) -> JsonDict:
+    _ = _require_thread(thread_id)
     record = delete_thread(thread_id)
     if record is None:
         raise HttpError(404, "Thread not found")
@@ -172,7 +175,7 @@ def remove_thread(request, thread_id: str):
 
 
 @router.get("/jobs/{job_id}", response=JobStatusResponse, summary="Get agent job status")
-def job_status(request, job_id: str):
+def job_status(request, job_id: str) -> JsonDict:
     return _job_status_payload(job_id)
 
 
@@ -180,11 +183,11 @@ def job_status(request, job_id: str):
 def job_events(request, job_id: str):
     def stream():
         deadline = time.monotonic() + _SSE_TIMEOUT_SECONDS
-        last_marker = None
-        last_event_id = None
+        last_marker: tuple[Any, Any] | None = None
+        last_event_id: str | None = None
 
         while time.monotonic() < deadline:
-            payload = _job_status_payload(job_id)
+            payload: JsonDict = _job_status_payload(job_id)
             marker = (payload.get("status"), payload.get("updated_at"))
             status = payload.get("status")
 
@@ -211,7 +214,7 @@ def job_events(request, job_id: str):
 
 
 @router.get("/health", summary="Health check")
-def health(request):
+def health(request) -> dict[str, Any]:
     return {
         "status": "ok",
         "jobs_db": jobs_db_available(),

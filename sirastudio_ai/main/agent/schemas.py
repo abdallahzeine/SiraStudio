@@ -1,9 +1,9 @@
 from pydantic import BaseModel, Field
-from typing import Literal
+from typing import Any, Literal
 
 
 class EditRequest(BaseModel):
-    cv: dict = Field(
+    cv: dict[str, Any] = Field(
         ...,
         description="Full CVData JSON from the frontend. Contains header, sections, template.",
     )
@@ -33,7 +33,7 @@ class EditRequest(BaseModel):
 
 
 class EditResponse(BaseModel):
-    cv: dict = Field(
+    cv: dict[str, Any] = Field(
         ...,
         description="Updated CVData JSON after the agent applied edits via tools.",
     )
@@ -87,7 +87,7 @@ class JobStatusResponse(BaseModel):
         None,
         description="Agent reply when available.",
     )
-    cv: dict | None = Field(
+    cv: dict[str, Any] | None = Field(
         None,
         description="Updated CVData JSON when job is completed.",
     )
