@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal, cast
 
 from langchain.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
@@ -47,22 +47,23 @@ class AgentContext:
 
 
 class CVGraphState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
-    cv: dict
-    metadata: dict
+    messages: Annotated[list[Any], add_messages]
+    cv: dict[str, Any]
+    metadata: dict[str, Any]
 
 
 _graph = None
 _checkpointer = None
 _store = None
+_store_context: Any = None
 _model = None
 
 
-def _extract_text(content) -> str:
+def _extract_text(content: object) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = []
+        parts: list[str] = []
         for block in content:
             if isinstance(block, dict):
                 if block.get("type") == "text":
@@ -81,7 +82,7 @@ def _clean_reply_text(text: str) -> str:
     return "\n\n".join(filtered).strip()
 
 
-def _extract_reply(result: dict) -> str:
+def _extract_reply(result: dict[str, Any]) -> str:
     messages = result.get("messages", [])
     if not messages:
         return ""
@@ -91,29 +92,29 @@ def _extract_reply(result: dict) -> str:
     return _clean_reply_text(_extract_text(last.content))
 
 
-def _get_tool_name(call) -> str | None:
+def _get_tool_name(call: object) -> str | None:
     if isinstance(call, dict):
         return call.get("name")
     return getattr(call, "name", None)
 
 
-def _get_tool_call_id(call) -> str | None:
+def _get_tool_call_id(call: object) -> str | None:
     if isinstance(call, dict):
         return call.get("id")
     return getattr(call, "id", None)
 
 
-def _get_tool_calls(message) -> list:
+def _get_tool_calls(message: object) -> list[Any]:
     if message is None:
         return []
     return getattr(message, "tool_calls", None) or []
 
 
-def _tool_names(tool_calls: list) -> list[str]:
+def _tool_names(tool_calls: list[Any]) -> list[str]:
     return [name for name in (_get_tool_name(call) for call in tool_calls) if name]
 
 
-def _tool_args(call) -> dict:
+def _tool_args(call: object) -> dict[str, Any]:
     if isinstance(call, dict):
         args = call.get("args") or {}
     else:
@@ -208,20 +209,22 @@ def _get_checkpointer():
     return _checkpointer
 
 
-def _build_sqlite_store():
+def _build_sqlite_store() -> Any:
+    global _store_context
     spec = importlib.util.find_spec("langgraph.store.sqlite")
     if spec is None:
         return InMemoryStore()
     from langgraph.store.sqlite import SqliteStore
 
     _STORE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    store = SqliteStore.from_conn_string(str(_STORE_DB_PATH))
+    _store_context = SqliteStore.from_conn_string(str(_STORE_DB_PATH))
+    store = _store_context.__enter__()
     if hasattr(store, "setup"):
         store.setup()
     return store
 
 
-def _get_store():
+def _get_store() -> Any:
     global _store
     if _store is None:
         mode = os.getenv(_STORE_MODE_ENV, "memory").lower()
@@ -547,32 +550,32 @@ def _get_graph():
 
 
 def run_agent(
-    cv: dict,
+    cv: dict[str, Any],
     message: str,
     thread_id: str,
     run_id: str | None = None,
     user_id: str | None = None,
     checkpoint_id: str | None = None,
     input_revision: int | None = None,
-    on_tool_event=None,
-):
+    on_tool_event: Any = None,
+) -> dict[str, Any]:
     run_id = run_id or uuid.uuid4().hex
-    inputs = {
+    inputs: CVGraphState = {
         "messages": [{"role": "user", "content": message}],
         "cv": cv,
         "metadata": {"thread_id": thread_id, "run_id": run_id, "input_revision": input_revision},
     }
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
+    config: dict[str, Any] = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
     if checkpoint_id:
         config["configurable"]["checkpoint_id"] = checkpoint_id
 
     logger.info("[PROMPT] thread_id=%s run_id=%s %s", thread_id, run_id, message[:200])
 
     context_user = user_id or thread_id
-    result = inputs
-    seen_tool_calls = set()
-    seen_tool_results = set()
-    for state in _get_graph().stream(inputs, config=config, context=AgentContext(user_id=context_user), stream_mode="values"):
+    result: Any = inputs
+    seen_tool_calls: set[str] = set()
+    seen_tool_results: set[str] = set()
+    for state in _get_graph().stream(inputs, config=cast(Any, config), context=AgentContext(user_id=context_user), stream_mode="values"):
         result = state
         for item in state.get("messages", []):
             for call in _get_tool_calls(item):

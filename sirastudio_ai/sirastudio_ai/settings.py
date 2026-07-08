@@ -55,7 +55,7 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'sirastudio_ai.urls'
 
-TEMPLATES = [
+TEMPLATES: list[dict[str, object]] = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
         'DIRS': [],

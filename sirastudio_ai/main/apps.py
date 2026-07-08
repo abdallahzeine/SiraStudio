@@ -1,4 +1,8 @@
-from django.apps import AppConfig
+from typing import Any
+
+from django.apps import AppConfig as _AppConfig
+
+AppConfig: Any = _AppConfig
 
 
 class MainConfig(AppConfig):
