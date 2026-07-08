@@ -1,4 +1,5 @@
 import type { CVData, SectionLayout } from '../../../shared/types';
+import { migrateCVData } from '../../../shared/utils/cvContent';
 
 // Classic layout defaults per section type (matches current visual output)
 const classicWorkExp: SectionLayout = {
@@ -37,7 +38,7 @@ const classicProjects: SectionLayout = {
   columns: 1,
 };
 
-export const initialCVData: CVData = {
+const rawInitialCVData = {
   template: { id: 'single-column', columns: 1 },
   header: {
     name: 'Abdallah Zeine Elabidine',
@@ -239,3 +240,5 @@ export const initialCVData: CVData = {
     },
   ],
 };
+
+export const initialCVData: CVData = migrateCVData(rawInitialCVData);

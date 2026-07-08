@@ -16,6 +16,7 @@ import { CVTextEditor } from './CVTextEditor';
 import { useDndSensors } from './useDndSensors';
 import { ReorderButtons, DeleteButton } from '../layouts/Buttons';
 import { SectionRenderer } from '../engine/SectionRenderer';
+import { fieldString } from '../../../shared/utils/cvContent';
 
 interface SectionListProps {
   sections: CVSection[];
@@ -61,24 +62,24 @@ function SpacerSectionEditor({
   onDelete: () => void;
 }) {
   const dispatch = useDispatch();
-  const currentValue = plainText(section.items[0]?.body) || '32';
+  const currentValue = plainText(section.content.items[0] ? fieldString(section.content.items[0], 'body') : undefined) || '32';
   const height = Number.parseInt(currentValue, 10);
 
   const setSpacerHeight = useCallback((value: string) => {
-    const first = section.items[0];
+    const first = section.content.items[0];
     if (first) {
       dispatch({
         op: 'replace',
-        path: `sections[${sectionIndex}].items[0]`,
-        value: { ...first, body: value },
+        path: `sections[${sectionIndex}].content.items[0]`,
+        value: { ...first, fields: { ...first.fields, body: value } },
       });
       return;
     }
 
     dispatch({
       op: 'insert',
-      path: `sections[${sectionIndex}].items[-1]`,
-      value: { id: `spacer-${section.id}`, body: value },
+      path: `sections[${sectionIndex}].content.items[-1]`,
+      value: { id: `spacer-${section.id}`, fields: { body: value } },
     });
   }, [dispatch, section, sectionIndex]);
 

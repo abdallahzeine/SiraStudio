@@ -2,6 +2,8 @@ from typing import Any
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import F
+from django.utils import timezone
 from ninja import Router
 from ninja.errors import HttpError
 from pydantic import BaseModel, Field, field_validator
@@ -18,7 +20,7 @@ class ErrorResponse(BaseModel):
     detail: str
 
 
-class CVDocumentCreateRequest(BaseModel):
+class _CVDocumentBase(BaseModel):
     cv: dict[str, Any] = Field(
         ...,
         description="Full CV JSON object. Must include header, sections, and template.",
@@ -31,22 +33,16 @@ class CVDocumentCreateRequest(BaseModel):
         return _validate_cv_json(value)
 
 
-class CVDocumentUpdateRequest(BaseModel):
-    cv: dict[str, Any] = Field(
-        ...,
-        description="Full CV JSON object. Must include header, sections, and template.",
-    )
-    title: str | None = Field(None, min_length=1, max_length=200)
+class CVDocumentCreateRequest(_CVDocumentBase):
+    pass
+
+
+class CVDocumentUpdateRequest(_CVDocumentBase):
     base_revision: int | None = Field(
         None,
         ge=1,
         description="Optional revision the client edited from. Used for conflict detection.",
     )
-
-    @field_validator("cv")
-    @classmethod
-    def validate_cv(cls, value: dict[str, Any]) -> dict[str, Any]:
-        return _validate_cv_json(value)
 
 
 class CVDocumentResponse(BaseModel):
@@ -73,6 +69,57 @@ def _validate_cv_json(value: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value.get("sections"), list):
         raise ValueError("cv.sections must be a list")
 
+    for section_index, section in enumerate(value["sections"]):
+        if not isinstance(section, dict):
+            raise ValueError(f"cv.sections[{section_index}] must be an object")
+        if not isinstance(section.get("id"), str):
+            raise ValueError(f"cv.sections[{section_index}].id must be a string")
+        if not isinstance(section.get("type"), str):
+            raise ValueError(f"cv.sections[{section_index}].type must be a string")
+        if not isinstance(section.get("title"), str):
+            raise ValueError(f"cv.sections[{section_index}].title must be a string")
+        if not isinstance(section.get("layout"), dict):
+            raise ValueError(f"cv.sections[{section_index}].layout must be an object")
+
+        content = section.get("content")
+        if not isinstance(content, dict):
+            raise ValueError(f"cv.sections[{section_index}].content must be an object")
+        schema = content.get("schema")
+        items = content.get("items")
+        if not isinstance(schema, list):
+            raise ValueError(f"cv.sections[{section_index}].content.schema must be a list")
+        if not isinstance(items, list):
+            raise ValueError(f"cv.sections[{section_index}].content.items must be a list")
+
+        schema_keys = set()
+        for field_index, field in enumerate(schema):
+            if not isinstance(field, dict):
+                raise ValueError(f"cv.sections[{section_index}].content.schema[{field_index}] must be an object")
+            if not isinstance(field.get("key"), str):
+                raise ValueError(f"cv.sections[{section_index}].content.schema[{field_index}].key must be a string")
+            schema_keys.add(field["key"])
+
+        for item_index, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ValueError(f"cv.sections[{section_index}].content.items[{item_index}] must be an object")
+            if not isinstance(item.get("id"), str):
+                raise ValueError(f"cv.sections[{section_index}].content.items[{item_index}].id must be a string")
+            fields = item.get("fields")
+            if not isinstance(fields, dict):
+                raise ValueError(f"cv.sections[{section_index}].content.items[{item_index}].fields must be an object")
+            for key, field_value in fields.items():
+                if key not in schema_keys:
+                    raise ValueError(
+                        f"cv.sections[{section_index}].content.items[{item_index}].fields.{key} is not in schema"
+                    )
+                if isinstance(field_value, str):
+                    continue
+                if isinstance(field_value, list) and all(isinstance(entry, str) for entry in field_value):
+                    continue
+                raise ValueError(
+                    f"cv.sections[{section_index}].content.items[{item_index}].fields.{key} must be a string or list of strings"
+                )
+
     return value
 
 
@@ -97,7 +144,7 @@ def _document_response(document: CVDocument) -> dict[str, Any]:
 def _get_active_document(document_id: str) -> CVDocument | None:
     try:
         return CVDocument.objects.get(id=document_id, is_deleted=False)
-    except (CVDocument.DoesNotExist, ValidationError, ValueError):
+    except (CVDocument.DoesNotExist, ValidationError):
         return None
 
 
@@ -135,30 +182,44 @@ def get_cv_document(request, document_id: str):
     summary="Update CV document",
 )
 def update_cv_document(request, document_id: str, body: CVDocumentUpdateRequest):
-    try:
-        with transaction.atomic():
-            document = CVDocument.objects.select_for_update().get(id=document_id, is_deleted=False)
-
-            if body.base_revision is not None and body.base_revision != document.revision:
-                return 409, {
-                    "detail": (
-                        "Revision conflict: current revision is "
-                        f"{document.revision}, but base_revision was {body.base_revision}."
-                    )
-                }
-
-            document.cv_json = body.cv
-            document.revision += 1
-            update_fields = ["cv_json", "revision", "updated_at"]
-
-            if body.title is not None:
-                document.title = _normalize_title(body.title)
-                update_fields.append("title")
-
-            document.save(update_fields=update_fields)
-    except (CVDocument.DoesNotExist, ValidationError, ValueError):
+    document = _get_active_document(document_id)
+    if document is None:
         return 404, {"detail": "CV document not found"}
 
+    if body.base_revision is not None and body.base_revision != document.revision:
+        return 409, {
+            "detail": (
+                "Revision conflict: current revision is "
+                f"{document.revision}, but base_revision was {body.base_revision}."
+            )
+        }
+
+    # select_for_update() is a silent no-op on SQLite, so the revision check
+    # above is unprotected against concurrent writers. Guard the write with an
+    # atomic conditional UPDATE: the revision bump only applies if the row still
+    # matches the revision we validated against.
+    expected_revision = body.base_revision if body.base_revision is not None else document.revision
+    update_fields_map: dict[str, Any] = {
+        "cv_json": body.cv,
+        "revision": F("revision") + 1,
+        "updated_at": timezone.now(),
+    }
+    if body.title is not None:
+        update_fields_map["title"] = _normalize_title(body.title)
+
+    with transaction.atomic():
+        rows = (
+            CVDocument.objects.filter(
+                id=document_id,
+                is_deleted=False,
+                revision=expected_revision,
+            ).update(**update_fields_map)
+        )
+
+    if rows == 0:
+        return 409, {"detail": "Revision conflict: document was modified concurrently."}
+
+    document.refresh_from_db()
     return _document_response(document)
 
 

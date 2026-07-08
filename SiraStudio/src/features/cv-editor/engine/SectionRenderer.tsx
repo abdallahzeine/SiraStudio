@@ -26,7 +26,8 @@ export function SectionRenderer({
   const dispatch = useDispatch();
   const def = sectionRegistry[section.type] ?? sectionRegistry.custom;
   const renderEditor = def.renderItemEditor ?? def.renderItem;
-  const { items, layout, schema } = section;
+  const { layout, content } = section;
+  const { items, schema } = content;
   const visibleItems = def.singleItem ? items.slice(0, 1) : items;
 
   const sensors = useDndSensors();
@@ -39,15 +40,15 @@ export function SectionRenderer({
       if (oldIndex !== -1 && newIndex !== -1) {
         dispatch({
           op: 'move',
-          from: `sections[${sectionIndex}].items[${oldIndex}]`,
-          path: `sections[${sectionIndex}].items[${newIndex}]`,
+          from: `sections[${sectionIndex}].content.items[${oldIndex}]`,
+          path: `sections[${sectionIndex}].content.items[${newIndex}]`,
         });
       }
     }
   }, [dispatch, items, sectionIndex]);
 
   const onChangeItem = useCallback((index: number, item: CVItem) => {
-    dispatch({ op: 'replace', path: `sections[${sectionIndex}].items[${index}]`, value: item });
+    dispatch({ op: 'replace', path: `sections[${sectionIndex}].content.items[${index}]`, value: item });
   }, [dispatch, sectionIndex]);
 
   const onMoveItem = useCallback((index: number, delta: -1 | 1) => {
@@ -55,20 +56,20 @@ export function SectionRenderer({
     if (target < 0 || target >= items.length) return;
     dispatch({
       op: 'move',
-      from: `sections[${sectionIndex}].items[${index}]`,
-      path: `sections[${sectionIndex}].items[${target}]`,
+      from: `sections[${sectionIndex}].content.items[${index}]`,
+      path: `sections[${sectionIndex}].content.items[${target}]`,
     });
   }, [dispatch, items.length, sectionIndex]);
 
   const onDeleteItem = useCallback((index: number) => {
     if (index < 0 || index >= items.length) return;
-    dispatch({ op: 'delete', path: `sections[${sectionIndex}].items[${index}]` });
+    dispatch({ op: 'delete', path: `sections[${sectionIndex}].content.items[${index}]` });
   }, [dispatch, items.length, sectionIndex]);
 
   const onAddItem = useCallback(() => {
     dispatch({
       op: 'insert',
-      path: `sections[${sectionIndex}].items[-1]`,
+      path: `sections[${sectionIndex}].content.items[-1]`,
       value: def.newItem(),
     });
   }, [def, dispatch, sectionIndex]);
@@ -96,7 +97,7 @@ export function SectionRenderer({
               sectionIndex,
               index: idx,
               total: items.length,
-              itemPath: `sections[${sectionIndex}].items[${idx}]`,
+              itemPath: `sections[${sectionIndex}].content.items[${idx}]`,
               onChange: (i: CVItem) => onChangeItem(idx, i),
               onMove: (d: -1 | 1) => onMoveItem(idx, d),
               onDelete: () => onDeleteItem(idx),

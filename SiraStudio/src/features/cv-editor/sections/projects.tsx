@@ -7,6 +7,7 @@ import { BulletListPrint } from '../../print/layouts/BulletListPrint';
 import { HeadingBlockPrint } from '../../print/layouts/HeadingBlockPrint';
 import { ItemFramePrint } from '../../print/layouts/ItemFramePrint';
 import { uid } from '../../../shared/utils/helpers';
+import { builtInSectionSchemas, fieldString, fieldStringArray } from '../../../shared/utils/cvContent';
 
 const renderProjectsEditor: NonNullable<SectionDef['renderItemEditor']> = ({
   itemPath,
@@ -17,11 +18,13 @@ const renderProjectsEditor: NonNullable<SectionDef['renderItemEditor']> = ({
   onMove,
   onDelete,
 }) => {
-  const dateEl = layout.dateSlot !== 'hidden' && item.date ? (
+  const title = fieldString(item, 'title');
+  const date = fieldString(item, 'date');
+  const dateEl = layout.dateSlot !== 'hidden' && date ? (
     <span className="text-gray-500 text-sm whitespace-nowrap">
       <CVTextEditor
-        value={item.date ?? ''}
-        path={`${itemPath}.date`}
+        value={date}
+        path={`${itemPath}.fields.date`}
         placeholder="MM/YYYY"
       />
     </span>
@@ -33,8 +36,8 @@ const renderProjectsEditor: NonNullable<SectionDef['renderItemEditor']> = ({
       <div className="flex justify-between items-start gap-2">
         <h3 className="text-base font-semibold leading-tight">
           <CVTextEditor
-            value={item.title ?? ''}
-            path={`${itemPath}.title`}
+            value={title}
+            path={`${itemPath}.fields.title`}
             placeholder="Project Name"
           />
         </h3>
@@ -42,12 +45,12 @@ const renderProjectsEditor: NonNullable<SectionDef['renderItemEditor']> = ({
       </div>
     );
   } else if (layout.dateSlot === 'left-margin') {
-    const hasDate = item.date && item.date.trim() !== '';
+    const hasDate = date.trim() !== '';
     titleRow = (
       <h3 className="text-base font-semibold leading-tight">
         <CVTextEditor
-          value={item.title ?? ''}
-          path={`${itemPath}.title`}
+          value={title}
+          path={`${itemPath}.fields.title`}
           placeholder="Project Name"
         />
         {hasDate && <><span className="text-gray-400 mx-1">–</span>{dateEl}</>}
@@ -58,8 +61,8 @@ const renderProjectsEditor: NonNullable<SectionDef['renderItemEditor']> = ({
       <div>
         <h3 className="text-base font-semibold leading-tight">
           <CVTextEditor
-            value={item.title ?? ''}
-            path={`${itemPath}.title`}
+            value={title}
+            path={`${itemPath}.fields.title`}
             placeholder="Project Name"
           />
         </h3>
@@ -70,8 +73,8 @@ const renderProjectsEditor: NonNullable<SectionDef['renderItemEditor']> = ({
     titleRow = (
       <h3 className="text-base font-semibold leading-tight">
         <CVTextEditor
-          value={item.title ?? ''}
-          path={`${itemPath}.title`}
+          value={title}
+          path={`${itemPath}.fields.title`}
           placeholder="Project Name"
         />
       </h3>
@@ -82,8 +85,8 @@ const renderProjectsEditor: NonNullable<SectionDef['renderItemEditor']> = ({
     <ItemFrame itemId={item.id} density={layout.density} index={index} total={total} onMove={onMove} onDelete={onDelete} path={itemPath}>
       {titleRow}
       <BulletList
-        bullets={item.bullets ?? []}
-        bulletsPath={`${itemPath}.bullets`}
+        bullets={fieldStringArray(item, 'bullets')}
+        bulletsPath={`${itemPath}.fields.bullets`}
         iconStyle={layout.iconStyle}
       />
     </ItemFrame>
@@ -97,6 +100,7 @@ export const projectsDef: SectionDef = {
   defaultTitle: 'PROJECTS',
   defaultLayout: classicLayouts.projects,
   recommendedLayout: professionalLayouts.projects,
+  schema: builtInSectionSchemas.projects,
   category: 'title-bullets',
   allowedLayoutOptions: {
     dateSlot: ['hidden', 'right-inline', 'left-margin', 'below-title'],
@@ -108,19 +112,19 @@ export const projectsDef: SectionDef = {
   singleItem: false,
   addItemLabel: 'Add project',
   availablePresetIds: ['classic'],
-  newItem: () => ({ id: uid(), title: 'New Project', date: '', bullets: ['Description...'] }),
+  newItem: () => ({ id: uid(), fields: { title: 'New Project', subtitle: '', date: '', bullets: ['Description...'] } }),
   renderItemEditor: renderProjectsEditor,
   renderItem: renderProjectsEditor,
   renderItemPrint: ({ item, layout }) => (
     <ItemFramePrint density={layout.density}>
       <HeadingBlockPrint
-        title={item.title ?? ''}
-        date={item.date}
+        title={fieldString(item, 'title')}
+        date={fieldString(item, 'date')}
         dateSlot={layout.dateSlot}
         titleClassName="text-base font-semibold"
         subtitleClassName="text-gray-700 text-sm"
       />
-      <BulletListPrint bullets={item.bullets ?? []} iconStyle={layout.iconStyle} />
+      <BulletListPrint bullets={fieldStringArray(item, 'bullets')} iconStyle={layout.iconStyle} />
     </ItemFramePrint>
   ),
 };

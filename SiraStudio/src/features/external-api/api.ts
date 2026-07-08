@@ -4,7 +4,20 @@ import type { CVDocument, DispatchResult, Patch, PatchError, StoreAPI } from '..
 import { sanitizeRichText } from '../../app/store/sanitize';
 import { defaultLayoutFor, uid } from '../../shared/utils/helpers';
 import type { CVData, CVItem, CVSection, IconType, SocialLink, SkillGroup } from '../../shared/types';
+import { fieldString, fieldStringArray, migrateCVData, skillGroupFromItem } from '../../shared/utils/cvContent';
 import { importJSONWithResolver, type ExternalImportFormat } from './import';
+
+type LegacyCVItem = {
+  id: string;
+  title?: string;
+  subtitle?: string;
+  role?: string;
+  location?: string;
+  date?: string;
+  body?: string;
+  bullets?: string[];
+  skillGroups?: SkillGroup[];
+};
 
 export interface CVMakerExternalAPI {
   readonly schemaVersion: 1;
@@ -108,12 +121,12 @@ function ensureStringArray(value: unknown): string[] {
 }
 
 function isCVDataLike(value: unknown): value is CVData {
-  if (!isRecord(value)) return false;
-  if (!isRecord(value.header)) return false;
-  if (!Array.isArray(value.sections)) return false;
-  if (!isRecord(value.template)) return false;
+  const data = migrateCVData(value);
+  if (!isRecord(data.header)) return false;
+  if (!Array.isArray(data.sections)) return false;
+  if (!isRecord(data.template)) return false;
 
-  const header = value.header;
+  const header = data.header;
   if (
     typeof header.name !== 'string' ||
     typeof header.location !== 'string' ||
@@ -124,7 +137,7 @@ function isCVDataLike(value: unknown): value is CVData {
     return false;
   }
 
-  const sections = value.sections;
+  const sections = data.sections;
   if (
     sections.some((section) => {
       if (!isRecord(section)) return true;
@@ -132,7 +145,9 @@ function isCVDataLike(value: unknown): value is CVData {
         typeof section.id !== 'string' ||
         typeof section.type !== 'string' ||
         typeof section.title !== 'string' ||
-        !Array.isArray(section.items) ||
+        !isRecord(section.content) ||
+        !Array.isArray(section.content.schema) ||
+        !Array.isArray(section.content.items) ||
         !isRecord(section.layout)
       );
     })
@@ -140,7 +155,7 @@ function isCVDataLike(value: unknown): value is CVData {
     return false;
   }
 
-  const template = value.template;
+  const template = data.template;
   if (typeof template.id !== 'string') return false;
   if (template.columns !== 1 && template.columns !== 2) return false;
 
@@ -231,14 +246,12 @@ function mapJSONResumeHeader(raw: Record<string, unknown>): CVData['header'] {
   };
 }
 
-function createSection(type: CVSection['type'], title: string, items: CVItem[]): CVSection {
-  return {
-    id: uid(),
-    type,
-    title,
-    layout: defaultLayoutFor(type),
-    items,
-  };
+function createSection(type: CVSection['type'], title: string, items: LegacyCVItem[]): CVSection {
+  return migrateCVData({
+    header: { name: '', location: '', phone: '', email: '', socialLinks: [] },
+    template: { id: 'single-column', columns: 1 },
+    sections: [{ id: uid(), type, title, layout: defaultLayoutFor(type), items }],
+  }).sections[0];
 }
 
 function mapJSONResumeToSections(raw: Record<string, unknown>): CVSection[] {
@@ -252,7 +265,7 @@ function mapJSONResumeToSections(raw: Record<string, unknown>): CVSection[] {
     );
   }
 
-  const workItems: CVItem[] = Array.isArray(raw.work)
+  const workItems: LegacyCVItem[] = Array.isArray(raw.work)
     ? raw.work
         .filter((entry): entry is Record<string, unknown> => isRecord(entry))
         .map((entry) => {
@@ -282,7 +295,7 @@ function mapJSONResumeToSections(raw: Record<string, unknown>): CVSection[] {
     sections.push(createSection('work-experience', 'WORK EXPERIENCE', workItems));
   }
 
-  const educationItems: CVItem[] = Array.isArray(raw.education)
+  const educationItems: LegacyCVItem[] = Array.isArray(raw.education)
     ? raw.education
         .filter((entry): entry is Record<string, unknown> => isRecord(entry))
         .map((entry) => {
@@ -323,7 +336,7 @@ function mapJSONResumeToSections(raw: Record<string, unknown>): CVSection[] {
     sections.push(createSection('skills', 'SKILLS', [{ id: uid(), skillGroups }]));
   }
 
-  const projectItems: CVItem[] = Array.isArray(raw.projects)
+  const projectItems: LegacyCVItem[] = Array.isArray(raw.projects)
     ? raw.projects
         .filter((entry): entry is Record<string, unknown> => isRecord(entry))
         .map((entry) => {
@@ -354,7 +367,7 @@ function mapJSONResumeToSections(raw: Record<string, unknown>): CVSection[] {
     sections.push(createSection('projects', 'PROJECTS', projectItems));
   }
 
-  const awardItems: CVItem[] = Array.isArray(raw.awards)
+  const awardItems: LegacyCVItem[] = Array.isArray(raw.awards)
     ? raw.awards
         .filter((entry): entry is Record<string, unknown> => isRecord(entry))
         .map((entry) => ({
@@ -370,7 +383,7 @@ function mapJSONResumeToSections(raw: Record<string, unknown>): CVSection[] {
     sections.push(createSection('awards', 'AWARDS & SCHOLARSHIPS', awardItems));
   }
 
-  const volunteerItems: CVItem[] = Array.isArray(raw.volunteer)
+  const volunteerItems: LegacyCVItem[] = Array.isArray(raw.volunteer)
     ? raw.volunteer
         .filter((entry): entry is Record<string, unknown> => isRecord(entry))
         .map((entry) => ({
@@ -406,16 +419,16 @@ function resolveImportData(raw: unknown, fmt: ExternalImportFormat): CVData | nu
   }
 
   if (isCVDataLike(raw)) {
-    return cloneValue(raw);
+    return migrateCVData(cloneValue(raw));
   }
 
   if (isRecord(raw)) {
     if (raw.schemaVersion === EXTERNAL_SCHEMA_VERSION && isCVDataLike(raw.data)) {
-      return cloneValue(raw.data);
+      return migrateCVData(cloneValue(raw.data));
     }
 
     if ('data' in raw && isCVDataLike(raw.data)) {
-      return cloneValue(raw.data);
+      return migrateCVData(cloneValue(raw.data));
     }
   }
 
@@ -436,7 +449,13 @@ function stripRichText(value: string | undefined): string {
 function itemToPlainText(item: CVItem): string[] {
   const lines: string[] = [];
 
-  const summary = [item.title, item.subtitle, item.role, item.location, item.date]
+  const summary = [
+    fieldString(item, 'title'),
+    fieldString(item, 'subtitle'),
+    fieldString(item, 'role'),
+    fieldString(item, 'location'),
+    fieldString(item, 'date'),
+  ]
     .map((value) => normalizeWhitespace(value ?? ''))
     .filter((value) => value.length > 0)
     .join(' | ');
@@ -445,31 +464,29 @@ function itemToPlainText(item: CVItem): string[] {
     lines.push(`- ${summary}`);
   }
 
-  const body = stripRichText(item.body);
+  const body = stripRichText(fieldString(item, 'body'));
   if (body) {
     lines.push(summary ? `  ${body}` : `- ${body}`);
   }
 
-  (item.bullets ?? []).forEach((bullet) => {
+  fieldStringArray(item, 'bullets').forEach((bullet) => {
     const normalized = stripRichText(bullet);
     if (normalized) {
       lines.push(`  * ${normalized}`);
     }
   });
 
-  (item.skillGroups ?? []).forEach((group) => {
-    const label = normalizeWhitespace(group.label);
-    const value = normalizeWhitespace(group.value);
-    if (label || value) {
-      lines.push(`  * ${label}: ${value}`.trim());
-    }
-  });
+  const skillGroup = skillGroupFromItem(item);
+  if (skillGroup.label || skillGroup.value) {
+    lines.push(`  * ${skillGroup.label}: ${skillGroup.value}`.trim());
+  }
 
-  if (item.values && isRecord(item.values)) {
-    Object.keys(item.values)
-      .sort()
-      .forEach((key) => {
-        const current = item.values?.[key];
+  const knownKeys = new Set(['title', 'subtitle', 'role', 'location', 'date', 'body', 'bullets', 'label', 'value']);
+  Object.keys(item.fields)
+    .filter((key) => !knownKeys.has(key))
+    .sort()
+    .forEach((key) => {
+        const current = item.fields[key];
         if (Array.isArray(current)) {
           const joined = current.map((entry) => stripRichText(typeof entry === 'string' ? entry : '')).filter(Boolean).join(', ');
           if (joined) {
@@ -483,7 +500,6 @@ function itemToPlainText(item: CVItem): string[] {
           lines.push(`  * ${key}: ${text}`);
         }
       });
-  }
 
   if (lines.length === 0) {
     lines.push('- (empty)');
@@ -519,35 +535,31 @@ function renderRichHTML(value: string | undefined): string {
 }
 
 function renderItemHTML(item: CVItem): string {
-  const headingParts = [item.title, item.subtitle, item.role]
+  const headingParts = [fieldString(item, 'title'), fieldString(item, 'subtitle'), fieldString(item, 'role')]
     .map((value) => normalizeWhitespace(value ?? ''))
     .filter((value) => value.length > 0);
 
-  const metaParts = [item.location, item.date]
+  const metaParts = [fieldString(item, 'location'), fieldString(item, 'date')]
     .map((value) => normalizeWhitespace(value ?? ''))
     .filter((value) => value.length > 0);
 
-  const bullets = (item.bullets ?? [])
+  const bullets = fieldStringArray(item, 'bullets')
     .map((bullet) => renderRichHTML(bullet))
     .filter((bullet) => bullet.trim().length > 0)
     .map((bullet) => `<li>${bullet}</li>`)
     .join('');
 
-  const groups = (item.skillGroups ?? [])
-    .map((group) => {
-      const label = escapeHTML(normalizeWhitespace(group.label));
-      const value = escapeHTML(normalizeWhitespace(group.value));
-      if (!label && !value) return '';
-      return `<li><strong>${label}</strong>${label && value ? ': ' : ''}${value}</li>`;
-    })
-    .filter((entry) => entry.length > 0)
-    .join('');
+  const group = skillGroupFromItem(item);
+  const groups = group.label || group.value
+    ? `<li><strong>${escapeHTML(normalizeWhitespace(group.label))}</strong>${group.label && group.value ? ': ' : ''}${escapeHTML(normalizeWhitespace(group.value))}</li>`
+    : '';
 
-  const values = item.values && isRecord(item.values)
-    ? Object.keys(item.values)
+  const knownKeys = new Set(['title', 'subtitle', 'role', 'location', 'date', 'body', 'bullets', 'label', 'value']);
+  const values = Object.keys(item.fields)
+        .filter((key) => !knownKeys.has(key))
         .sort()
         .map((key) => {
-          const current = item.values?.[key];
+          const current = item.fields[key];
           const rendered = Array.isArray(current)
             ? current
                 .map((entry) => (typeof entry === 'string' ? escapeHTML(normalizeWhitespace(entry)) : ''))
@@ -559,8 +571,7 @@ function renderItemHTML(item: CVItem): string {
           return `<li><strong>${escapeHTML(key)}</strong>: ${rendered}</li>`;
         })
         .filter((entry) => entry.length > 0)
-        .join('')
-    : '';
+        .join('');
 
   const headingHTML = headingParts.length > 0
     ? `<h3>${escapeHTML(headingParts.join(' - '))}</h3>`
@@ -570,7 +581,8 @@ function renderItemHTML(item: CVItem): string {
     ? `<p class="item-meta">${escapeHTML(metaParts.join(' | '))}</p>`
     : '';
 
-  const bodyHTML = item.body ? `<div class="item-body">${renderRichHTML(item.body)}</div>` : '';
+  const body = fieldString(item, 'body');
+  const bodyHTML = body ? `<div class="item-body">${renderRichHTML(body)}</div>` : '';
   const bulletsHTML = bullets ? `<ul>${bullets}</ul>` : '';
   const groupsHTML = groups ? `<ul class="kv-list">${groups}</ul>` : '';
   const valuesHTML = values ? `<ul class="kv-list">${values}</ul>` : '';
@@ -599,7 +611,7 @@ function buildHTMLExport(doc: CVDocument): string {
   const sectionsHTML = doc.data.sections
     .map((section) => {
       const title = normalizeWhitespace(section.title || section.type);
-      const items = section.items.map((item) => renderItemHTML(item)).join('');
+      const items = section.content.items.map((item) => renderItemHTML(item)).join('');
       return `<section><h2>${escapeHTML(title)}</h2>${items}</section>`;
     })
     .join('');
@@ -723,7 +735,7 @@ function createExternalAPI(store: StoreAPI): CVMakerExternalAPI {
         doc.data.sections.forEach((section) => {
           lines.push('');
           lines.push(normalizeWhitespace(section.title || section.type).toUpperCase());
-          section.items.forEach((item) => {
+          section.content.items.forEach((item) => {
             lines.push(...itemToPlainText(item));
           });
         });

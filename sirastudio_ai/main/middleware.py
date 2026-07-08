@@ -94,9 +94,13 @@ def _section_by_id(cv):
 
 
 def _item_by_id(section):
+    content = _as_cv_dict(section).get("content")
+    items = _as_cv_dict(content).get("items") if isinstance(content, dict) else None
+    if items is None:
+        items = _as_cv_dict(section).get("items")
     return {
         i.get("id"): i
-        for i in _as_section_list(_as_cv_dict(section).get("items"))
+        for i in _as_section_list(items)
         if isinstance(i, dict) and i.get("id")
     }
 

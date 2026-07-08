@@ -1,5 +1,6 @@
 import type { SectionDef } from './registry';
 import { uid } from '../../../shared/utils/helpers';
+import { builtInSectionSchemas, fieldString } from '../../../shared/utils/cvContent';
 
 function parseSpacerHeight(value: string | undefined): number {
   const plain = (value ?? '')
@@ -26,6 +27,7 @@ export const spacerDef: SectionDef = {
   defaultTitle: '',
   defaultLayout: DEFAULT_LAYOUT,
   recommendedLayout: DEFAULT_LAYOUT,
+  schema: builtInSectionSchemas.spacer,
   allowedLayoutOptions: {
     dateSlot: ['hidden'],
     iconStyle: ['none'],
@@ -37,8 +39,8 @@ export const spacerDef: SectionDef = {
   singleItem: true,
   addItemLabel: '',
   availablePresetIds: [],
-  newItem: () => ({ id: uid(), body: '32' }),
+  newItem: () => ({ id: uid(), fields: { body: '32' } }),
   renderItemEditor: () => null,
   renderItem: () => null,
-  renderItemPrint: ({ item }) => <div style={{ height: parseSpacerHeight(item.body) }} />,
+  renderItemPrint: ({ item }) => <div style={{ height: parseSpacerHeight(fieldString(item, 'body')) }} />,
 };

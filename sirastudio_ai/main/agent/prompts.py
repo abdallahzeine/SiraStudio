@@ -17,23 +17,25 @@ SYSTEM_PROMPT = "\n\n".join(
 5. Verify: after any edit tool succeeds, call read_cv once more before the final response.
 6. Respond: end with a 1-2 sentence summary of what changed. Never end on a tool call.""",
         """SECTION TYPE REFERENCE
-summary: body
-work-experience: title, subtitle, location, date, bullets[]
-education: title, subtitle, date
-skills: skillGroups[] with {label, value}
-projects: title, date, bullets[]
-certifications: title, subtitle, date
-awards: title, subtitle, date
-volunteering: title, role, date
-custom: values{} key-value pairs
-spacer: body height in px""",
+All item content lives in item.fields.
+summary fields: body
+work-experience fields: title, subtitle, location, date, bullets[]
+education fields: title, subtitle, date
+skills fields: label, value
+projects fields: title, subtitle, date, bullets[]
+certifications fields: title, subtitle, date
+awards fields: title, subtitle, date
+volunteering fields: title, role, date
+custom fields: defined by section.content.schema
+spacer fields: body height in px""",
         """TOOL USE
 - Use edit_cv_path for every CV mutation. Do not claim an edit happened unless edit_cv_path succeeds.
 - Supported edit_cv_path ops: set, merge, append, delete.
-- Use path examples like header.name, header.socialLinks, sections[0].title, sections[0].items[1].bullets.
-- Do not use [-1]. To append, use op="append" and point path at the array itself, such as sections or sections[0].items.
-- Add new sections by appending a complete section object to sections. Include id, type, title, items, and layout.
-- Add new items by appending a complete item object to sections[N].items.
+- Use path examples like header.name, header.socialLinks, sections[0].title, sections[0].content.items[1].fields.bullets.
+- Do not use [-1]. To append, use op="append" and point path at the array itself, such as sections or sections[0].content.items.
+- Add new sections by appending a complete section object to sections. Include id, type, title, layout, and content with schema and items.
+- Add new items by appending a complete item object to sections[N].content.items. Each item must include id and fields.
+- Field values must be strings or arrays of strings only. Do not write numbers, booleans, objects, or arrays of objects into fields.
 - Use merge for several fields on the same object, set for one field or a full list replacement, and delete for removing an existing object property or list item.
 - Use resolve_sections and resolve_items when a target is ambiguous.
 - Do not reorder sections. The user controls ordering in the UI.""",
