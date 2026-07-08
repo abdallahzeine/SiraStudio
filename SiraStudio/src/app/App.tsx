@@ -3,6 +3,7 @@ import type { CVData, CVSection } from "../shared/types";
 import { Toolbar } from "../features/cv-editor/components/Toolbar";
 import { SectionModal } from "../features/cv-editor/components/SectionModal";
 import { SavesPanel } from "../features/saves/SavesPanel";
+import { useBackendDocumentAutosave } from "../features/saves/hooks/useBackendDocumentAutosave";
 import { AIAssistant } from "../features/assistant/AIAssistant";
 import { ConfirmModal } from "../shared/components/ConfirmModal";
 import { SplashScreen } from "../shared/components/SplashScreen";
@@ -70,6 +71,7 @@ export default function App() {
   const closeConfirm = () => setConfirmModal(null);
 
   useUndoRedoShortcuts(dispatch, history);
+  useBackendDocumentAutosave(cv, revision);
 
   const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
 
