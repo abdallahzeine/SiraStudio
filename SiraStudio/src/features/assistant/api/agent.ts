@@ -27,7 +27,7 @@ export interface AgentJobStatusResponse {
 }
 
 export interface AgentToolEvent {
-  id: string;
+  id: number;
   job_id: string;
   type: 'tool';
   created_at: string;
@@ -88,6 +88,10 @@ async function createEditJob(cv: CVData, message: string, threadId: string, opti
   return data.job_id;
 }
 
+async function getJobStatus(jobId: string, signal?: AbortSignal): Promise<AgentJobStatusResponse> {
+  return fetchJson<AgentJobStatusResponse>(`/api/agent/jobs/${encodeURIComponent(jobId)}`, { signal });
+}
+
 function createEventQueue<T>() {
   const values: T[] = [];
   const waiters: Array<(value: IteratorResult<T>) => void> = [];
@@ -144,6 +148,7 @@ async function* streamJob(jobId: string, options: EditCVOptions = {}): AsyncGene
 
   const source = new EventSource(`/api/agent/jobs/${encodeURIComponent(jobId)}/events`);
   let settled = false;
+  let checkingStatus = false;
 
   const finish = (callback: () => void) => {
     if (settled) {
@@ -156,16 +161,25 @@ async function* streamJob(jobId: string, options: EditCVOptions = {}): AsyncGene
   };
 
   const handleJob = (event: MessageEvent<string>) => {
+    if (settled) {
+      return;
+    }
     const job = JSON.parse(event.data) as AgentJobStatusResponse;
     options.onJobStatus?.(job);
     queue.push(job);
   };
 
   const handleTool = (event: MessageEvent<string>) => {
+    if (settled) {
+      return;
+    }
     queue.push(JSON.parse(event.data) as AgentToolEvent);
   };
 
   const handleCompleted = (event: MessageEvent<string>) => {
+    if (settled) {
+      return;
+    }
     const job = JSON.parse(event.data) as AgentJobStatusResponse;
     options.onJobStatus?.(job);
     queue.push(job);
@@ -173,14 +187,52 @@ async function* streamJob(jobId: string, options: EditCVOptions = {}): AsyncGene
   };
 
   const handleFailed = (event: MessageEvent<string>) => {
+    if (settled) {
+      return;
+    }
     const job = JSON.parse(event.data) as AgentJobStatusResponse;
     options.onJobStatus?.(job);
     queue.push(job);
     finish(() => queue.fail(new Error(job.error || 'Agent job failed.')));
   };
 
+  const checkJobStatus = async () => {
+    if (settled || checkingStatus) {
+      return;
+    }
+    checkingStatus = true;
+    try {
+      const job = await getJobStatus(jobId, options.signal);
+      if (job.status === 'completed') {
+        handleCompleted({ data: JSON.stringify(job) } as MessageEvent<string>);
+      } else if (job.status === 'failed') {
+        handleFailed({ data: JSON.stringify(job) } as MessageEvent<string>);
+      } else {
+        options.onJobStatus?.(job);
+      }
+    } catch {
+      // EventSource remains open and will retry with its Last-Event-ID cursor.
+    } finally {
+      checkingStatus = false;
+    }
+  };
+
   const timer = setTimeout(() => {
-    finish(() => queue.fail(new Error('Agent job timed out.')));
+    void (async () => {
+      const job = await getJobStatus(jobId).catch(() => null);
+      if (settled) {
+        return;
+      }
+      if (job?.status === 'completed') {
+        handleCompleted({ data: JSON.stringify(job) } as MessageEvent<string>);
+        return;
+      }
+      if (job?.status === 'failed') {
+        handleFailed({ data: JSON.stringify(job) } as MessageEvent<string>);
+        return;
+      }
+      finish(() => queue.fail(new Error('Agent job did not finish in time.')));
+    })();
   }, JOB_TIMEOUT_MS);
 
   options.signal?.addEventListener('abort', () => {
@@ -192,7 +244,7 @@ async function* streamJob(jobId: string, options: EditCVOptions = {}): AsyncGene
   source.addEventListener('completed', handleCompleted);
   source.addEventListener('failed', handleFailed);
   source.onerror = () => {
-    finish(() => queue.fail(new Error('Agent job stream failed.')));
+    void checkJobStatus();
   };
 
   while (true) {
