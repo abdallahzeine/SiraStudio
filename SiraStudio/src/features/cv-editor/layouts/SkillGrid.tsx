@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -10,7 +10,7 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { CVItem, SkillGroup } from '../../../shared/types';
+import type { SkillGroup } from '../../../shared/types';
 import { CVTextEditor } from '../editor/CVTextEditor';
 import { useDndSensors } from '../editor/useDndSensors';
 import { useDispatch } from '../../../app/store';
@@ -19,7 +19,7 @@ import { uid } from '../../../shared/utils/helpers';
 
 interface SkillGridProps {
   path: string;
-  item: CVItem;
+  groups: SkillGroup[];
 }
 
 function SortableSkillGroup({
@@ -84,10 +84,8 @@ function SortableSkillGroup({
   );
 }
 
-export function SkillGrid({ path, item }: SkillGridProps) {
+export function SkillGrid({ path, groups }: SkillGridProps) {
   const dispatch = useDispatch();
-  const groups = useMemo(() => item.skillGroups ?? [], [item.skillGroups]);
-
   const sensors = useDndSensors();
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {

@@ -1,6 +1,7 @@
 import type { CVData } from '../types';
 import type { CVDocument } from '../../app/store/types';
 import { createBlankCVData } from '../../features/saves/utils/snapshots';
+import { migrateCVData } from './cvContent';
 
 const CV_KEY = 'cv-maker-cv-data';
 const SCHEMA_VERSION = 1 as const;
@@ -11,10 +12,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isValidSchema(parsed: unknown): parsed is CVData {
   if (!isRecord(parsed)) return false;
-  const data = parsed;
+  const data = migrateCVData(parsed);
   // Require new-schema fields: template at root, layout on every section
   if (!data.header || !Array.isArray(data.sections) || !data.template) return false;
-  const sections = data.sections as Array<Record<string, unknown>>;
+  const sections = data.sections;
   if (sections.some((s) => !s.layout)) return false;
   return true;
 }
@@ -46,7 +47,7 @@ function normalizeDocument(parsed: Record<string, unknown>): CVDocument | null {
   return {
     schemaVersion: SCHEMA_VERSION,
     revision,
-    data: parsed.data,
+    data: migrateCVData(parsed.data),
     meta: { lastSavedAt },
   };
 }
@@ -57,7 +58,7 @@ function wrapLegacyData(parsed: unknown): CVDocument | null {
   return {
     schemaVersion: SCHEMA_VERSION,
     revision: 0,
-    data: parsed,
+    data: migrateCVData(parsed),
     meta: { lastSavedAt: Date.now() },
   };
 }

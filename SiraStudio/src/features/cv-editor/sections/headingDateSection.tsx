@@ -4,6 +4,7 @@ import { ItemFrame } from '../layouts/ItemFrame';
 import { HeadingBlockPrint } from '../../print/layouts/HeadingBlockPrint';
 import { ItemFramePrint } from '../../print/layouts/ItemFramePrint';
 import { uid } from '../../../shared/utils/helpers';
+import { builtInSectionSchemas, fieldString } from '../../../shared/utils/cvContent';
 import type { AllowedLayoutOptions, SectionDef } from './registry';
 
 type SecondaryField = 'subtitle' | 'role';
@@ -28,20 +29,18 @@ const baseLayoutOptions = {
   columns: [1, 2],
 } satisfies Omit<AllowedLayoutOptions, 'iconStyle'>;
 
-const blankHeadingDateItem = () => ({ id: uid(), title: '', subtitle: '', date: '' });
-
 function renderEditor(field: SecondaryField): NonNullable<SectionDef['renderItemEditor']> {
   return ({ itemPath, item, layout, index, total, onMove, onDelete }) => (
     <ItemFrame itemId={item.id} density={layout.density} index={index} total={total} onMove={onMove} onDelete={onDelete} path={itemPath}>
       <HeadingBlock
-        title={item.title ?? ''}
-        titlePath={`${itemPath}.title`}
-        subtitle={field === 'subtitle' ? item.subtitle ?? '' : undefined}
-        subtitlePath={field === 'subtitle' ? `${itemPath}.subtitle` : undefined}
-        role={field === 'role' ? item.role ?? '' : undefined}
-        rolePath={field === 'role' ? `${itemPath}.role` : undefined}
-        date={item.date ?? ''}
-        datePath={`${itemPath}.date`}
+        title={fieldString(item, 'title')}
+        titlePath={`${itemPath}.fields.title`}
+        subtitle={field === 'subtitle' ? fieldString(item, 'subtitle') : undefined}
+        subtitlePath={field === 'subtitle' ? `${itemPath}.fields.subtitle` : undefined}
+        role={field === 'role' ? fieldString(item, 'role') : undefined}
+        rolePath={field === 'role' ? `${itemPath}.fields.role` : undefined}
+        date={fieldString(item, 'date')}
+        datePath={`${itemPath}.fields.date`}
         dateSlot={layout.dateSlot}
       />
     </ItemFrame>
@@ -52,10 +51,10 @@ function renderPrint(field: SecondaryField): NonNullable<SectionDef['renderItemP
   return ({ item, layout }) => (
     <ItemFramePrint density={layout.density}>
       <HeadingBlockPrint
-        title={item.title ?? ''}
-        subtitle={field === 'subtitle' ? item.subtitle : undefined}
-        role={field === 'role' ? item.role : undefined}
-        date={item.date}
+        title={fieldString(item, 'title')}
+        subtitle={field === 'subtitle' ? fieldString(item, 'subtitle') : undefined}
+        role={field === 'role' ? fieldString(item, 'role') : undefined}
+        date={fieldString(item, 'date')}
         dateSlot={layout.dateSlot}
       />
     </ItemFramePrint>
@@ -72,6 +71,7 @@ export function createHeadingDateSectionDef(config: HeadingDateSectionConfig): S
     defaultTitle: config.defaultTitle,
     defaultLayout: config.defaultLayout,
     recommendedLayout: config.recommendedLayout,
+    schema: builtInSectionSchemas[config.type],
     category: 'heading-date',
     allowedLayoutOptions: {
       ...baseLayoutOptions,
@@ -80,7 +80,7 @@ export function createHeadingDateSectionDef(config: HeadingDateSectionConfig): S
     singleItem: false,
     addItemLabel: config.addItemLabel,
     availablePresetIds: ['classic'],
-    newItem: config.newItem ?? blankHeadingDateItem,
+    newItem: config.newItem ?? (() => ({ id: uid(), fields: { title: '', [config.secondaryField]: '', date: '' } })),
     renderItemEditor,
     renderItem: renderItemEditor,
     renderItemPrint: renderPrint(config.secondaryField),

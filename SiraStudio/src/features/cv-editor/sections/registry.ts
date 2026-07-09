@@ -1,5 +1,5 @@
 import type {
-  SectionType, CVItem, CVSection, SectionLayout, CustomSectionSchema,
+  SectionType, CVItem, CVSection, SectionLayout, SectionFieldDef,
   DateFormat, DateSlot, IconStyle, Separator, Density,
 } from '../../../shared/types';
 import type { SectionCategory } from './categories';
@@ -25,8 +25,7 @@ export interface RenderEditorProps {
   onChange: (i: CVItem) => void;
   onMove: (d: -1 | 1) => void;
   onDelete: () => void;
-  /** Only provided for custom sections */
-  schema?: CustomSectionSchema;
+  schema: SectionFieldDef[];
 }
 
 export interface RenderPrintProps {
@@ -37,8 +36,7 @@ export interface RenderPrintProps {
   index: number;
   total: number;
   dateFormat: DateFormat;
-  /** Only provided for custom sections */
-  schema?: CustomSectionSchema;
+  schema: SectionFieldDef[];
 }
 
 export interface AllowedLayoutOptions {
@@ -57,6 +55,7 @@ export interface SectionDef {
   defaultLayout: SectionLayout;
   /** Recommended layout for professional CVs (used for guidance, not enforcement) */
   recommendedLayout: SectionLayout;
+  schema: SectionFieldDef[];
   allowedLayoutOptions: AllowedLayoutOptions;
   /** Skeleton category this section belongs to (drives wizard preview) */
   category: SectionCategory;

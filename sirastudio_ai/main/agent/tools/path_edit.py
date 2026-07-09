@@ -169,8 +169,8 @@ def edit_cv_path(
     Supported operations:
     - op="set": set a scalar/object/list at a path, e.g. path="header.name".
     - op="merge": shallow-merge an object into an existing object, e.g. path="header".
-    - op="append": append value to an existing array, e.g. path="sections" or "sections[0].items".
-    - op="delete": delete an existing object property or list item, e.g. path="sections[0].items[1]".
+    - op="append": append value to an existing array, e.g. path="sections" or "sections[0].content.items".
+    - op="delete": delete an existing object property or list item, e.g. path="sections[0].content.items[1]".
 
     Do not use [-1]. For append, point path at the array itself.
     """

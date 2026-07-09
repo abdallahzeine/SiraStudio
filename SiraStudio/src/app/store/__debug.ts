@@ -79,24 +79,24 @@ function verifyOperations(base: CVData): VerificationResult {
       name: 'insert append',
       patch: {
         op: 'insert',
-        path: 'sections[4].items[-1]',
-        value: { id: 'cert-x', title: 'Inserted Cert', subtitle: 'Org', date: '01/2026' },
+        path: 'sections[4].content.items[-1]',
+        value: { id: 'cert-x', fields: { title: 'Inserted Cert', subtitle: 'Org', date: '01/2026' } },
       },
-      check: (data) => data.sections[4].items[data.sections[4].items.length - 1]?.id === 'cert-x',
+      check: (data) => data.sections[4].content.items[data.sections[4].content.items.length - 1]?.id === 'cert-x',
     },
     {
       name: 'delete',
-      patch: { op: 'delete', path: 'sections[4].items[2]' },
-      check: (data) => data.sections[4].items.every((item) => item.id !== 'cert-x'),
+      patch: { op: 'delete', path: 'sections[4].content.items[2]' },
+      check: (data) => data.sections[4].content.items.every((item) => item.id !== 'cert-x'),
     },
     {
       name: 'move',
       patch: {
         op: 'move',
-        from: 'sections[4].items[0]',
-        path: 'sections[4].items[1]',
+        from: 'sections[4].content.items[0]',
+        path: 'sections[4].content.items[1]',
       },
-      check: (data) => data.sections[4].items[1]?.id === base.sections[4].items[0]?.id,
+      check: (data) => data.sections[4].content.items[1]?.id === base.sections[4].content.items[0]?.id,
     },
   ];
 
@@ -120,7 +120,7 @@ function verifyOperations(base: CVData): VerificationResult {
 function verifyAppendAndNested(base: CVData): VerificationResult {
   const appendPatch: Patch = {
     op: 'insert',
-    path: 'sections[5].items[0].bullets[-1]',
+    path: 'sections[5].content.items[0].fields.bullets[-1]',
     value: 'Nested appended bullet',
   };
 
@@ -129,10 +129,10 @@ function verifyAppendAndNested(base: CVData): VerificationResult {
     return { test: 'Append + nested path', passed: false, detail: appendResult.error.message };
   }
 
-  const bullets = appendResult.next.sections[5].items[0].bullets ?? [];
+  const bullets = appendResult.next.sections[5].content.items[0].fields.bullets as string[];
   const nestedSet = applyPatch(appendResult.next, {
     op: 'set',
-    path: `sections[5].items[0].bullets[${bullets.length - 1}]`,
+    path: `sections[5].content.items[0].fields.bullets[${bullets.length - 1}]`,
     value: 'Nested updated bullet',
   });
 
@@ -140,7 +140,7 @@ function verifyAppendAndNested(base: CVData): VerificationResult {
     return { test: 'Append + nested path', passed: false, detail: nestedSet.error.message };
   }
 
-  const lastBullet = nestedSet.next.sections[5].items[0].bullets?.at(-1);
+  const lastBullet = (nestedSet.next.sections[5].content.items[0].fields.bullets as string[] | undefined)?.at(-1);
   return {
     test: 'Append + nested path',
     passed: lastBullet === 'Nested updated bullet',
@@ -242,9 +242,9 @@ function verifyDiffRoundTrip(base: CVData): VerificationResult {
   const target = cloneCVData(base);
   target.header.name = 'Diff Engine Roundtrip';
   target.header.socialLinks[0].label = 'GitHub Profile';
-  target.sections[0].items[0].title = 'Senior AI Engineer Intern';
-  target.sections[4].items.splice(1, 1);
-  target.sections[5].items[0].bullets = [...(target.sections[5].items[0].bullets ?? []), 'Diff-added bullet'];
+  target.sections[0].content.items[0].fields.title = 'Senior AI Engineer Intern';
+  target.sections[4].content.items.splice(1, 1);
+  target.sections[5].content.items[0].fields.bullets = [...(target.sections[5].content.items[0].fields.bullets as string[]), 'Diff-added bullet'];
   target.sections.push({
     id: 'custom-diff',
     type: 'custom',
@@ -256,21 +256,21 @@ function verifyDiffRoundTrip(base: CVData): VerificationResult {
       density: 'normal',
       columns: 1,
     },
-    schema: {
-      fields: [
+    content: {
+      schema: [
         { key: 'outcome', label: 'Outcome', kind: 'text' },
         { key: 'highlights', label: 'Highlights', kind: 'bullets' },
       ],
-    },
-    items: [
-      {
-        id: 'custom-diff-item-1',
-        values: {
-          outcome: 'Patch round-trip validated',
-          highlights: ['set', 'insert', 'delete'],
+      items: [
+        {
+          id: 'custom-diff-item-1',
+          fields: {
+            outcome: 'Patch round-trip validated',
+            highlights: ['set', 'insert', 'delete'],
+          },
         },
-      },
-    ],
+      ],
+    },
   });
 
   const patches = diffCVData(base, target);

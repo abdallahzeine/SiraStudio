@@ -3,6 +3,7 @@ import type { CVSection, CVItem, DateFormat } from '../../shared/types';
 import { sectionRegistry } from '../cv-editor/sections/registry';
 import { PrintRichText } from './PrintRichText';
 import { ItemFramePrint } from './layouts/ItemFramePrint';
+import { fieldString } from '../../shared/utils/cvContent';
 
 interface SectionListPrintProps {
   sections: CVSection[];
@@ -12,7 +13,7 @@ interface SectionListPrintProps {
 function renderItemFallback(section: CVSection, item: CVItem) {
   return (
     <ItemFramePrint density={section.layout.density}>
-      <PrintRichText value={item.title || item.subtitle || item.role || item.body || ''} className="text-gray-700 text-sm" />
+      <PrintRichText value={fieldString(item, 'title') || fieldString(item, 'subtitle') || fieldString(item, 'role') || fieldString(item, 'body')} className="text-gray-700 text-sm" />
     </ItemFramePrint>
   );
 }
@@ -24,11 +25,12 @@ export function SectionListPrint({ sections, dateFormat }: SectionListPrintProps
         const definition = sectionRegistry[section.type] ?? sectionRegistry.custom;
         const renderPrint = definition.renderItemPrint;
         const sectionItemsClass = section.layout.columns === 2 ? 'columns-2' : '';
+        const { items, schema } = section.content;
 
         if (section.type === 'spacer') {
-          const spacerItems = section.items.length === 0
-            ? [{ id: `${section.id}-spacer`, body: '32' }]
-            : section.items;
+          const spacerItems = items.length === 0
+            ? [{ id: `${section.id}-spacer`, fields: { body: '32' } }]
+            : items;
 
           return (
             <Fragment key={section.id}>
@@ -43,7 +45,7 @@ export function SectionListPrint({ sections, dateFormat }: SectionListPrintProps
                       index: itemIndex,
                       total: spacerItems.length,
                       dateFormat,
-                      schema: section.schema,
+                      schema,
                     })
                     : renderItemFallback(section, item)}
                 </Fragment>
@@ -60,7 +62,7 @@ export function SectionListPrint({ sections, dateFormat }: SectionListPrintProps
                 <PrintRichText value={section.title} className="text-lg font-bold text-gray-800" inline />
               </div>
               <div className={sectionItemsClass}>
-                {section.items.map((item, itemIndex) => {
+                {items.map((item, itemIndex) => {
                   if (renderPrint) {
                     return (
                       <Fragment key={item.id}>
@@ -70,9 +72,9 @@ export function SectionListPrint({ sections, dateFormat }: SectionListPrintProps
                           layout: section.layout,
                           sectionIndex,
                           index: itemIndex,
-                          total: section.items.length,
+                          total: items.length,
                           dateFormat,
-                          schema: section.schema,
+                          schema,
                         })}
                       </Fragment>
                     );

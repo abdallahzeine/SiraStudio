@@ -7,7 +7,7 @@ import { BulletListPrint } from '../../print/layouts/BulletListPrint';
 import { HeadingBlockPrint } from '../../print/layouts/HeadingBlockPrint';
 import { ItemFramePrint } from '../../print/layouts/ItemFramePrint';
 import { uid } from '../../../shared/utils/helpers';
-import { dateRangeString } from '../../../shared/utils/dateUtils';
+import { builtInSectionSchemas, fieldString, fieldStringArray } from '../../../shared/utils/cvContent';
 
 const renderWorkExperienceEditor: NonNullable<SectionDef['renderItemEditor']> = ({
   itemPath,
@@ -18,31 +18,26 @@ const renderWorkExperienceEditor: NonNullable<SectionDef['renderItemEditor']> = 
   onMove,
   onDelete,
 }) => {
-  const fmt = 'MM/YYYY';
-  const legacyDate =
-    item.dateStart || item.dateEnd
-      ? dateRangeString(item.dateStart, item.dateEnd, fmt)
-      : (item.date ?? '');
-  const displayDate = item.date ?? legacyDate;
+  const displayDate = fieldString(item, 'date');
 
   return (
     <ItemFrame itemId={item.id} density={layout.density} index={index} total={total} onMove={onMove} onDelete={onDelete} path={itemPath}>
       <HeadingBlock
-        title={item.title ?? ''}
-        titlePath={`${itemPath}.title`}
-        subtitle={item.subtitle ?? ''}
-        subtitlePath={`${itemPath}.subtitle`}
-        location={item.location ?? ''}
-        locationPath={`${itemPath}.location`}
+        title={fieldString(item, 'title')}
+        titlePath={`${itemPath}.fields.title`}
+        subtitle={fieldString(item, 'subtitle')}
+        subtitlePath={`${itemPath}.fields.subtitle`}
+        location={fieldString(item, 'location')}
+        locationPath={`${itemPath}.fields.location`}
         date={layout.dateSlot !== 'hidden' ? displayDate : undefined}
-        datePath={`${itemPath}.date`}
+        datePath={`${itemPath}.fields.date`}
         dateSlot={layout.dateSlot}
         titleClassName="text-base font-semibold"
         subtitleClassName="text-gray-700 text-sm"
       />
       <BulletList
-        bullets={item.bullets ?? []}
-        bulletsPath={`${itemPath}.bullets`}
+        bullets={fieldStringArray(item, 'bullets')}
+        bulletsPath={`${itemPath}.fields.bullets`}
         iconStyle={layout.iconStyle}
       />
     </ItemFrame>
@@ -56,6 +51,7 @@ export const workExperienceDef: SectionDef = {
   defaultTitle: 'WORK EXPERIENCE',
   defaultLayout: classicLayouts['work-experience'],
   recommendedLayout: professionalLayouts['work-experience'],
+  schema: builtInSectionSchemas['work-experience'],
   category: 'title-bullets',
   allowedLayoutOptions: {
     dateSlot: ['right-inline', 'below-title', 'hidden'],
@@ -69,33 +65,31 @@ export const workExperienceDef: SectionDef = {
   availablePresetIds: ['classic', 'professional'],
   newItem: () => ({
     id: uid(),
-    title: '',
-    subtitle: '',
-    location: '',
-    date: '',
-    bullets: [''],
+    fields: {
+      title: '',
+      subtitle: '',
+      location: '',
+      date: '',
+      bullets: [''],
+    },
   }),
   renderItemEditor: renderWorkExperienceEditor,
   renderItem: renderWorkExperienceEditor,
-  renderItemPrint: ({ item, layout, dateFormat }) => {
-    const legacyDate =
-      item.dateStart || item.dateEnd
-        ? dateRangeString(item.dateStart, item.dateEnd, dateFormat)
-        : (item.date ?? '');
-    const displayDate = item.date ?? legacyDate;
+  renderItemPrint: ({ item, layout }) => {
+    const displayDate = fieldString(item, 'date');
 
     return (
       <ItemFramePrint density={layout.density}>
         <HeadingBlockPrint
-          title={item.title ?? ''}
-          subtitle={item.subtitle}
-          location={item.location}
+          title={fieldString(item, 'title')}
+          subtitle={fieldString(item, 'subtitle')}
+          location={fieldString(item, 'location')}
           date={layout.dateSlot !== 'hidden' ? displayDate : undefined}
           dateSlot={layout.dateSlot}
           titleClassName="text-base font-semibold"
           subtitleClassName="text-gray-700 text-sm"
         />
-        <BulletListPrint bullets={item.bullets ?? []} iconStyle={layout.iconStyle} />
+        <BulletListPrint bullets={fieldStringArray(item, 'bullets')} iconStyle={layout.iconStyle} />
       </ItemFramePrint>
     );
   },

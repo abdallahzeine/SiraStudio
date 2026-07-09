@@ -1,5 +1,6 @@
 import type { CVData } from '../../../shared/types';
 import { isValidCVData } from '../../saves/utils/snapshots';
+import { migrateCVData } from '../../../shared/utils/cvContent';
 
 export interface AgentEditResult {
   cv: CVData;
@@ -236,7 +237,7 @@ function completedJobToEditResponse(job: AgentJobStatusResponse): AgentEditResul
   }
 
   return {
-    cv: job.cv,
+    cv: migrateCVData(job.cv),
     reply: typeof job.reply === 'string' && job.reply.trim() ? job.reply : 'Done.',
   };
 }

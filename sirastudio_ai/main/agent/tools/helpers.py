@@ -41,7 +41,7 @@ def _resolve_section_index(cv: dict, section_ref: int | str | None):
 
 
 def _resolve_item_index(section: dict, item_ref: int | str | None):
-    items = section.get("items", [])
+    items = _section_items(section)
     if isinstance(item_ref, int):
         return item_ref if 0 <= item_ref < len(items) else None
     if isinstance(item_ref, str):
@@ -57,6 +57,32 @@ def _resolve_item_index(section: dict, item_ref: int | str | None):
 
 def _normalize_text(value) -> str:
     return str(value or "").strip().lower()
+
+
+def _section_content(section: dict) -> dict:
+    content = section.get("content", {}) if isinstance(section, dict) else {}
+    return content if isinstance(content, dict) else {}
+
+
+def _section_items(section: dict) -> list:
+    items = _section_content(section).get("items", [])
+    if isinstance(items, list):
+        return items
+    legacy_items = section.get("items", []) if isinstance(section, dict) else []
+    return legacy_items if isinstance(legacy_items, list) else []
+
+
+def _section_schema(section: dict) -> list:
+    schema = _section_content(section).get("schema", [])
+    return schema if isinstance(schema, list) else []
+
+
+def _item_fields(item: dict) -> dict:
+    fields = item.get("fields", {}) if isinstance(item, dict) else {}
+    if isinstance(fields, dict):
+        return fields
+    values = item.get("values", {}) if isinstance(item, dict) else {}
+    return values if isinstance(values, dict) else {}
 
 
 def find_sections(cv: dict, query: str | None = None, type: str | None = None) -> list[dict]:
@@ -77,7 +103,7 @@ def find_sections(cv: dict, query: str | None = None, type: str | None = None) -
             "id": section.get("id"),
             "type": section.get("type"),
             "title": section.get("title"),
-            "item_count": len(section.get("items", [])) if isinstance(section.get("items"), list) else 0,
+            "item_count": len(_section_items(section)),
         })
     return matches
 
@@ -89,11 +115,12 @@ def find_items(cv: dict, section_ref: int | str | None, query: str | None = None
     section = cv.get("sections", [])[section_idx]
     query_text = _normalize_text(query)
     matches = []
-    for item_idx, item in enumerate(section.get("items", [])):
+    for item_idx, item in enumerate(_section_items(section)):
         if not isinstance(item, dict):
             continue
+        fields = _item_fields(item)
         haystack = " ".join(
-            _normalize_text(item.get(key))
+            _normalize_text(fields.get(key, item.get(key)))
             for key in ("id", "title", "subtitle", "role", "location", "date", "body")
         )
         if query_text and query_text not in haystack:
@@ -105,10 +132,7 @@ def find_items(cv: dict, section_ref: int | str | None, query: str | None = None
             "section_title": section.get("title"),
             "item_idx": item_idx,
             "id": item.get("id"),
-            "title": item.get("title"),
-            "subtitle": item.get("subtitle"),
-            "role": item.get("role"),
-            "date": item.get("date"),
+            "fields": fields,
         })
     return matches
 
@@ -131,10 +155,34 @@ def is_valid_cv_shape(cv: dict) -> bool:
             return False
         if not isinstance(section.get("title"), str):
             return False
-        if not isinstance(section.get("items"), list):
+        content = section.get("content")
+        if not isinstance(content, dict):
+            return False
+        if not isinstance(content.get("schema"), list):
+            return False
+        if not isinstance(content.get("items"), list):
             return False
         if not isinstance(section.get("layout"), dict):
             return False
+        schema_keys = {
+            field.get("key")
+            for field in content.get("schema", [])
+            if isinstance(field, dict) and isinstance(field.get("key"), str)
+        }
+        for item in content.get("items", []):
+            if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+                return False
+            fields = item.get("fields")
+            if not isinstance(fields, dict):
+                return False
+            for key, field_value in fields.items():
+                if key not in schema_keys:
+                    return False
+                if isinstance(field_value, str):
+                    continue
+                if isinstance(field_value, list) and all(isinstance(entry, str) for entry in field_value):
+                    continue
+                return False
     return True
 
 
@@ -145,33 +193,19 @@ def _check_section_item(cv: dict, section_idx: int | str, item_idx: int | str):
         return None, f"No section matching {section_idx}."
 
     section = sections[resolved_section_idx]
-    items = section.get("items", [])
+    items = _section_items(section)
     resolved_item_idx = _resolve_item_index(section, item_idx)
     if resolved_item_idx is None:
         return None, f"No item matching {item_idx} in section [{resolved_section_idx}]."
     return items[resolved_item_idx], None
 
 
-_ITEM_CONTENT_KEYS = (
-    "id",
-    "title",
-    "subtitle",
-    "role",
-    "location",
-    "date",
-    "body",
-    "bullets",
-    "skillGroups",
-    "values",
-)
-
-
 def _indexed_item(item_idx: int, item: dict) -> dict:
-    summary = {"item_idx": item_idx}
-    for key in _ITEM_CONTENT_KEYS:
-        if key in item:
-            summary[key] = item[key]
-    return summary
+    return {
+        "item_idx": item_idx,
+        "id": item.get("id"),
+        "fields": _item_fields(item),
+    }
 
 
 def _indexed_section(section_idx: int, section: dict) -> dict:
@@ -180,9 +214,10 @@ def _indexed_section(section_idx: int, section: dict) -> dict:
         "id": section.get("id"),
         "type": section.get("type"),
         "title": section.get("title"),
+        "schema": _section_schema(section),
         "items": [
             _indexed_item(item_idx, item)
-            for item_idx, item in enumerate(section.get("items", []))
+            for item_idx, item in enumerate(_section_items(section))
         ],
     }
 

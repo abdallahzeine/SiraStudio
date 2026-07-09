@@ -12,5 +12,5 @@ export const volunteeringDef = createHeadingDateSectionDef({
   addItemLabel: 'Add entry',
   iconStyle: ['none'],
   secondaryField: 'role',
-  newItem: () => ({ id: uid(), title: 'Organization', role: 'Role', date: 'MM/YYYY - Present' }),
+  newItem: () => ({ id: uid(), fields: { title: 'Organization', role: 'Role', date: 'MM/YYYY - Present' } }),
 });
