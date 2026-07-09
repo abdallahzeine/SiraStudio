@@ -19,15 +19,16 @@ _db_path = Path.home() / ".cv-maker" / "agent-jobs.sqlite"
 _MAX_WORKERS_ENV = "CV_MAKER_JOB_WORKERS"
 _MESSAGE_PREVIEW_LENGTH = 180
 _THREAD_TITLE_LENGTH = 64
+JOB_INTERRUPTED = "JOB_INTERRUPTED"
+JOB_INTERRUPTED_MESSAGE = "The agent job was interrupted while the service restarted. Please try again."
 _FAILURE_MESSAGES = {
     "AGENT_FAILED": "The agent could not complete your request. Please try again.",
-    "JOB_INTERRUPTED": "The agent job was interrupted. Please try again.",
+    JOB_INTERRUPTED: JOB_INTERRUPTED_MESSAGE,
 }
 
 _LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=int(os.getenv(_MAX_WORKERS_ENV, "2")))
 _db_ready = False
-_JOB_EVENTS: dict[str, list[JsonDict]] = {}
 
 
 def get_db_path() -> Path:
@@ -41,7 +42,12 @@ def set_db_path(path: Path) -> None:
 
 
 def reset_job_events() -> None:
-    _JOB_EVENTS.clear()
+    _init_db()
+    with _LOCK:
+        conn = _connect()
+        _ = conn.execute("DELETE FROM agent_job_events")
+        conn.commit()
+        conn.close()
 
 
 def _utc_now() -> str:
@@ -53,30 +59,33 @@ def failure_message(error_code: str) -> str:
 
 
 def append_job_event(job_id: str, event_type: str, data: JsonDict) -> JsonDict:
-    event = {
-        "id": uuid.uuid4().hex,
-        "job_id": job_id,
-        "type": event_type,
-        "created_at": _utc_now(),
-        "data": data,
-    }
+    _init_db()
     with _LOCK:
-        events = _JOB_EVENTS.setdefault(job_id, [])
-        events.append(event)
-        if len(events) > 200:
-            del events[:-200]
+        conn = _connect()
+        event = _insert_job_event(conn, job_id, event_type, data)
+        conn.commit()
+        conn.close()
     return event
 
 
-def list_job_events(job_id: str, after_id: str | None = None) -> list[JsonDict]:
-    with _LOCK:
-        events = list(_JOB_EVENTS.get(job_id, []))
-    if after_id is None:
-        return events
-    ids = [event["id"] for event in events]
-    if after_id not in ids:
-        return events
-    return events[ids.index(after_id) + 1:]
+def list_job_events(job_id: str, after_cursor: int | str | None = None) -> list[JsonDict]:
+    _init_db()
+    try:
+        cursor = max(0, int(after_cursor or 0))
+    except (TypeError, ValueError):
+        cursor = 0
+    conn = _connect()
+    rows = conn.execute(
+        """
+        SELECT id, job_id, event_type, created_at, data_json
+        FROM agent_job_events
+        WHERE job_id = ? AND id > ?
+        ORDER BY id ASC
+        """,
+        (job_id, cursor),
+    ).fetchall()
+    conn.close()
+    return [_job_event_from_row(row) for row in rows]
 
 
 def _connect() -> sqlite3.Connection:
@@ -84,6 +93,36 @@ def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _job_event_from_row(row: sqlite3.Row) -> JsonDict:
+    return {
+        "id": row["id"],
+        "job_id": row["job_id"],
+        "type": row["event_type"],
+        "created_at": row["created_at"],
+        "data": json.loads(row["data_json"]),
+    }
+
+
+def _insert_job_event(
+    conn: sqlite3.Connection, job_id: str, event_type: str, data: JsonDict
+) -> JsonDict:
+    created_at = _utc_now()
+    cursor = conn.execute(
+        """
+        INSERT INTO agent_job_events (job_id, event_type, created_at, data_json)
+        VALUES (?, ?, ?, ?)
+        """,
+        (job_id, event_type, created_at, json.dumps(data, ensure_ascii=False)),
+    )
+    return {
+        "id": cursor.lastrowid,
+        "job_id": job_id,
+        "type": event_type,
+        "created_at": created_at,
+        "data": data,
+    }
 
 
 def _init_db() -> None:
@@ -125,6 +164,20 @@ def _init_db() -> None:
             _ = conn.execute("ALTER TABLE agent_jobs ADD COLUMN error_code TEXT")
         _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS agent_jobs_status_idx ON agent_jobs(status)"
+        )
+        _ = conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_job_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                data_json TEXT NOT NULL
+            )
+            """
+        )
+        _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS agent_job_events_job_cursor_idx ON agent_job_events(job_id, id)"
         )
         _ = conn.execute(
             """
@@ -174,19 +227,61 @@ def _init_db() -> None:
         _db_ready = True
 
 
-def _update_job(job_id: str, **fields: Any) -> None:
+def _job_status_payload_from_record(job_id: str, record: JsonDict | None) -> JsonDict:
+    if record is None:
+        return {
+            "job_id": job_id,
+            "status": "failed",
+            "error": "Job not found.",
+            "error_code": "JOB_NOT_FOUND",
+        }
+
+    status = record.get("status")
+    cv = None
+    revision_mismatch = None
+    if status == "completed":
+        cv_json = record.get("cv_json")
+        if cv_json:
+            cv = json.loads(cv_json)
+        revision_mismatch = bool(record.get("revision_mismatch"))
+
+    error_code = record.get("error_code") if status == "failed" else None
+    return {
+        "job_id": job_id,
+        "status": status,
+        "created_at": record.get("created_at"),
+        "updated_at": record.get("updated_at"),
+        "thread_id": record.get("thread_id"),
+        "message_preview": record.get("message_preview"),
+        "reply": record.get("reply"),
+        "cv": cv,
+        "run_id": record.get("run_id"),
+        "revision_mismatch": revision_mismatch,
+        "error": failure_message(error_code or "AGENT_FAILED") if status == "failed" else None,
+        "error_code": error_code or "AGENT_FAILED" if status == "failed" else None,
+    }
+
+
+def _set_job_status(job_id: str, status: str, **fields: Any) -> JsonDict | None:
     _init_db()
-    if not fields:
-        return
+    fields["status"] = status
     fields["updated_at"] = _utc_now()
     columns = ", ".join(f"{key} = ?" for key in fields.keys())
-    values = list(fields.values())
-    values.append(job_id)
     with _LOCK:
         conn = _connect()
-        _ = conn.execute(f"UPDATE agent_jobs SET {columns} WHERE id = ?", values)
+        _ = conn.execute(
+            f"UPDATE agent_jobs SET {columns} WHERE id = ?", [*fields.values(), job_id]
+        )
+        row = conn.execute("SELECT * FROM agent_jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None:
+            conn.close()
+            return None
+        payload = _job_status_payload_from_record(job_id, dict(row))
+        event_type = status if status in {"completed", "failed"} else "job"
+        _insert_job_event(conn, job_id, event_type, payload)
         conn.commit()
         conn.close()
+    return payload
 
 
 def _message_preview(message: str) -> str:
@@ -438,28 +533,31 @@ def update_message_status(
 def _mark_failed(job_id: str, error_code: str) -> None:
     job = get_job(job_id)
     error = failure_message(error_code)
-    _update_job(job_id, status="failed", error=error, error_code=error_code)
-    if job:
-        append_thread_message(
-            job["thread_id"],
-            "assistant",
-            error or "Agent job failed.",
-            job_id=job_id,
-            run_id=job.get("run_id"),
-            status="failed",
-            error=error,
-        )
+    if job is None or job.get("status") in {"completed", "failed"}:
+        return
+    _set_job_status(job_id, "failed", error=error, error_code=error_code)
+    append_thread_message(
+        job["thread_id"],
+        "assistant",
+        error or "Agent job failed.",
+        job_id=job_id,
+        run_id=job.get("run_id"),
+        status="failed",
+        error=error,
+    )
 
 
 def _mark_completed(job_id: str, result: JsonDict) -> None:
     job = get_job(job_id)
+    if job is None or job.get("status") in {"completed", "failed"}:
+        return
     metadata = result.get("metadata", {})
     revision_mismatch = 1 if metadata.get("revision_mismatch") else 0
     reply = result.get("reply") or ""
     cv_json = json.dumps(result.get("cv") or {}, ensure_ascii=False)
-    _update_job(
+    _set_job_status(
         job_id,
-        status="completed",
+        "completed",
         reply=reply,
         cv_json=cv_json,
         run_id=result.get("run_id"),
@@ -467,15 +565,14 @@ def _mark_completed(job_id: str, result: JsonDict) -> None:
         error=None,
         error_code=None,
     )
-    if job:
-        append_thread_message(
-            job["thread_id"],
-            "assistant",
-            reply or "Done.",
-            job_id=job_id,
-            run_id=result.get("run_id"),
-            status="completed",
-        )
+    append_thread_message(
+        job["thread_id"],
+        "assistant",
+        reply or "Done.",
+        job_id=job_id,
+        run_id=result.get("run_id"),
+        status="completed",
+    )
 
 
 def _run_job(
@@ -488,7 +585,7 @@ def _run_job(
     input_revision: int | None,
 ) -> JsonDict:
     run_id = uuid.uuid4().hex
-    _update_job(job_id, status="running", run_id=run_id)
+    _set_job_status(job_id, "running", run_id=run_id)
     logger.info("AGENT_JOB_START | job_id=%s thread_id=%s run_id=%s", job_id, thread_id, run_id)
     return run_agent(
         cv,
@@ -577,6 +674,14 @@ def create_job(
             """,
             (now, now, job_id, thread_id),
         )
+        row = conn.execute("SELECT * FROM agent_jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is not None:
+            _insert_job_event(
+                conn,
+                job_id,
+                "job",
+                _job_status_payload_from_record(job_id, dict(row)),
+            )
         conn.commit()
         conn.close()
 
@@ -593,6 +698,22 @@ def get_job(job_id: str) -> JsonDict | None:
     if row is None:
         return None
     return dict(row)
+
+
+def job_status_payload(job_id: str) -> JsonDict:
+    return _job_status_payload_from_record(job_id, get_job(job_id))
+
+
+def recover_interrupted_jobs() -> int:
+    _init_db()
+    conn = _connect()
+    rows = conn.execute(
+        "SELECT id FROM agent_jobs WHERE status IN ('queued', 'running')"
+    ).fetchall()
+    conn.close()
+    for row in rows:
+        _mark_failed(row["id"], JOB_INTERRUPTED)
+    return len(rows)
 
 
 def list_recent_jobs(limit: int = 50) -> list[JsonDict]:
