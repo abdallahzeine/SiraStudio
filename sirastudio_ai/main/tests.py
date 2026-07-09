@@ -1,12 +1,14 @@
-﻿import json
+﻿import asyncio
+import json
 import tempfile
 import time
+from concurrent.futures import Future
 from threading import Event
 from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 
 from . import jobs
 
@@ -176,7 +178,7 @@ class AgentBackendSmokeTests(TestCase):
             self.assertEqual(status["cv"], {"header": {}, "sections": []})
 
             events: Any = self.client.get(f"/api/agent/jobs/{job_id}/events")
-            body = b"".join(events.streaming_content).decode("utf-8")
+            body = self._sse_body(events)
             self.assertIn("event: tool", body)
             self.assertIn("event: completed", body)
 
@@ -283,6 +285,278 @@ class AgentBackendSmokeTests(TestCase):
         ).fetchall()
         conn.close()
         return [dict(row) for row in rows]
+
+    def test_agent_error_responses_are_safe(self) -> None:
+        malformed: Any = self.client.post(
+            "/api/agent/edit",
+            data=b'{"cv":',
+            content_type="application/json",
+        )
+        self.assertEqual(malformed.status_code, 400)
+        self.assertEqual(
+            malformed.json(),
+            {"code": "INVALID_JSON", "message": "Request body must be valid JSON."},
+        )
+
+        request_failure = RuntimeError("provider credentials leaked")
+        with override_settings(DEBUG=True), patch("main.api.create_job", side_effect=request_failure):
+            failed_request: Any = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": {"header": {}, "sections": []},
+                        "message": "Update my CV",
+                        "thread_id": "request-error",
+                    }
+                ),
+                content_type="application/json",
+            )
+        self.assertEqual(failed_request.status_code, 500)
+        self.assertEqual(
+            failed_request.json(),
+            {
+                "code": "AGENT_REQUEST_FAILED",
+                "message": "The agent request could not be completed. Please try again.",
+            },
+        )
+        self.assertNotIn("provider credentials leaked", failed_request.content.decode())
+        self.assertNotIn("Traceback", failed_request.content.decode())
+
+        def failing_run_agent(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("provider credentials leaked")
+
+        with patch("main.jobs.run_agent", failing_run_agent):
+            edit: Any = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": {"header": {}, "sections": []},
+                        "message": "Update my CV",
+                        "thread_id": "job-error",
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(edit.status_code, 200)
+            self.assertEqual(set(edit.json()), {"job_id"})
+            status = self._wait_for_job(edit.json()["job_id"])
+
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error_code"], "AGENT_FAILED")
+        self.assertEqual(status["error"], "The agent could not complete your request. Please try again.")
+        self.assertNotIn("provider credentials leaked", json.dumps(status))
+        stored_job = jobs.get_job(edit.json()["job_id"])
+        self.assertEqual(stored_job["error_code"], "AGENT_FAILED")
+        self.assertEqual(stored_job["error"], "The agent could not complete your request. Please try again.")
+
+        failed_message = next(
+            message
+            for message in jobs.list_thread_messages("job-error")
+            if message["status"] == "failed"
+        )
+        raw_error = "provider credentials leaked from legacy thread history"
+        jobs.update_message_status(
+            failed_message["id"],
+            "failed",
+            content=raw_error,
+            error=raw_error,
+        )
+        thread: Any = self.client.get("/api/agent/threads/job-error")
+        self.assertEqual(thread.status_code, 200)
+        projected_message = next(
+            message
+            for message in thread.json()["messages"]
+            if message["id"] == failed_message["id"]
+        )
+        self.assertEqual(projected_message["content"], "The agent could not complete your request. Please try again.")
+        self.assertEqual(projected_message["error"], "The agent could not complete your request. Please try again.")
+        self.assertEqual(thread.json()["message_preview"], "The agent could not complete your request. Please try again.")
+        self.assertNotIn(raw_error, json.dumps(thread.json()))
+
+    def test_job_sse_survives_timeout_resumes_by_cursor_and_recovers_at_asgi_startup(self) -> None:
+        started = Event()
+        release = Event()
+
+        def fake_run_agent(
+            cv: dict[str, Any],
+            message: str,
+            thread_id: str,
+            run_id: str | None = None,
+            on_tool_event: Any = None,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            if on_tool_event:
+                on_tool_event({"id": "tool-1", "name": "read_cv", "status": "running"})
+            started.set()
+            release.wait(timeout=2)
+            return {"cv": cv, "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
+
+        with patch("main.jobs.run_agent", fake_run_agent):
+            thread: Any = self.client.post(
+                "/api/agent/threads",
+                data=json.dumps({"title": "Durable SSE"}),
+                content_type="application/json",
+            )
+            self.assertEqual(thread.status_code, 200)
+            thread_id = thread.json()["thread_id"]
+            edit: Any = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": {"header": {}, "sections": []},
+                        "message": "Read my CV",
+                        "thread_id": thread_id,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(edit.status_code, 200)
+            job_id = edit.json()["job_id"]
+            self.assertTrue(started.wait(timeout=1))
+
+            with patch("main.api._SSE_TIMEOUT_SECONDS", 0.03), patch("main.api._SSE_POLL_SECONDS", 0.01):
+                timed_out_stream: Any = self.client.get(f"/api/agent/jobs/{job_id}/events")
+                timed_out_body = self._sse_body(timed_out_stream)
+
+            self.assertNotIn("event: failed", timed_out_body)
+            self.assertEqual(self.client.get(f"/api/agent/jobs/{job_id}").json()["status"], "running")
+
+            release.set()
+            self.assertEqual(self._wait_for_job(job_id)["status"], "completed")
+
+        all_events: Any = self.client.get(f"/api/agent/jobs/{job_id}/events")
+        all_body = self._sse_body(all_events)
+        cursors = [
+            int(line.removeprefix("id: "))
+            for line in all_body.splitlines()
+            if line.startswith("id: ")
+        ]
+        self.assertGreaterEqual(len(cursors), 4)
+        self.assertEqual(cursors, sorted(cursors))
+        self.assertIn("event: tool", all_body)
+
+        resumed_events: Any = self.client.get(
+            f"/api/agent/jobs/{job_id}/events", HTTP_LAST_EVENT_ID=str(cursors[0])
+        )
+        resumed_body = self._sse_body(resumed_events)
+        resumed_cursors = [
+            int(line.removeprefix("id: "))
+            for line in resumed_body.splitlines()
+            if line.startswith("id: ")
+        ]
+        self.assertEqual(resumed_cursors, cursors[1:])
+
+        class InterruptedExecutor:
+            def submit(self, *args: Any, **kwargs: Any) -> Future[Any]:
+                return Future()
+
+        with patch("main.jobs._EXECUTOR", InterruptedExecutor()):
+            queued_id = jobs.create_job(
+                {"header": {}, "sections": []}, "Restart me", "restart-thread"
+            )
+            running_id = jobs.create_job(
+                {"header": {}, "sections": []}, "Restart me too", "restart-thread"
+            )
+        jobs._set_job_status(running_id, "running", run_id="interrupted-run")
+        self.assertEqual(jobs.get_job(queued_id)["status"], "queued")
+        self.assertEqual(jobs.get_job(running_id)["status"], "running")
+
+        lifespan_messages = asyncio.run(self._run_asgi_lifespan())
+        self.assertEqual(
+            lifespan_messages,
+            [
+                {"type": "lifespan.startup.complete"},
+                {"type": "lifespan.shutdown.complete"},
+            ],
+        )
+
+        for job_id in (queued_id, running_id):
+            interrupted = jobs.get_job(job_id)
+            self.assertIsNotNone(interrupted)
+            self.assertEqual(interrupted["status"], "failed")
+            self.assertEqual(interrupted["error_code"], jobs.JOB_INTERRUPTED)
+            self.assertEqual(interrupted["error"], jobs.JOB_INTERRUPTED_MESSAGE)
+            terminal_event = jobs.list_job_events(job_id)[-1]
+            self.assertIsInstance(terminal_event["id"], int)
+            self.assertEqual(terminal_event["type"], "failed")
+            self.assertEqual(terminal_event["data"]["error_code"], jobs.JOB_INTERRUPTED)
+            self.assertEqual(terminal_event["data"]["error"], jobs.JOB_INTERRUPTED_MESSAGE)
+
+    @staticmethod
+    async def _run_asgi_lifespan() -> list[dict[str, str]]:
+        from sirastudio_ai.asgi import application
+
+        incoming = iter(({"type": "lifespan.startup"}, {"type": "lifespan.shutdown"}))
+        sent: list[dict[str, str]] = []
+
+        async def receive() -> dict[str, str]:
+            return next(incoming)
+
+        async def send(message: dict[str, str]) -> None:
+            sent.append(message)
+
+        await application({"type": "lifespan"}, receive, send)
+        return sent
+
+    @staticmethod
+    async def _collect_sse(streaming_content: Any) -> str:
+        chunks: list[bytes | str] = []
+        async for chunk in streaming_content:
+            chunks.append(chunk)
+        return b"".join(
+            chunk if isinstance(chunk, bytes) else chunk.encode("utf-8") for chunk in chunks
+        ).decode("utf-8")
+
+    def _sse_body(self, response: Any) -> str:
+        return asyncio.run(self._collect_sse(response.streaming_content))
+
+    def test_opted_in_agent_logs_redact_content_and_stay_bounded(self) -> None:
+        password = "diagnostic-password"
+        inert_bearer = "Bearer inert-redaction-fixture-only"
+        detail = f"password is {password}; {inert_bearer}; {'x' * 500}"
+        max_chars = 160
+
+        def fake_run_agent(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError(detail)
+
+        with self.settings(
+            CV_MAKER_AGENT_LOG_CONTENT=True,
+            CV_MAKER_AGENT_LOG_CONTENT_MAX_CHARS=max_chars,
+        ):
+            with self.assertLogs("agent_logger", level="INFO") as logs:
+                with patch("main.jobs.run_agent", fake_run_agent):
+                    thread: Any = self.client.post(
+                        "/api/agent/threads",
+                        data=json.dumps({"title": "Logging test"}),
+                        content_type="application/json",
+                    )
+                    thread_id = thread.json()["thread_id"]
+                    edit: Any = self.client.post(
+                        "/api/agent/edit",
+                        data=json.dumps(
+                            {
+                                "cv": {"header": {}, "sections": []},
+                                "message": "Trigger diagnostic logging",
+                                "thread_id": thread_id,
+                            }
+                        ),
+                        content_type="application/json",
+                    )
+                    status = self._wait_for_job(edit.json()["job_id"])
+
+        output = "\n".join(logs.output)
+        content_payloads = [
+            line.rsplit(" | data=", 1)[1]
+            for line in logs.output
+            if "AGENT_CONTENT" in line
+        ]
+        self.assertEqual(status["status"], "failed")
+        self.assertIn("password is [REDACTED]", output)
+        self.assertNotIn(password, output)
+        self.assertNotIn(inert_bearer, output)
+        self.assertTrue(content_payloads)
+        self.assertTrue(any(payload.endswith("...[truncated]") for payload in content_payloads))
+        self.assertTrue(all(len(payload) <= max_chars for payload in content_payloads))
 
     def _wait_for_job(self, job_id: str) -> dict[str, Any]:
         for _ in range(40):

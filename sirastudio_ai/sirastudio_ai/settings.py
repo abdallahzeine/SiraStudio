@@ -10,20 +10,48 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# Content diagnostics are process-wide and intended only for short-lived support
+# sessions: enable the flag, restart the service, then disable it and restart.
+CV_MAKER_AGENT_LOG_CONTENT = os.getenv("CV_MAKER_AGENT_LOG_CONTENT", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+CV_MAKER_AGENT_LOG_CONTENT_MAX_CHARS = _positive_env_int(
+    "CV_MAKER_AGENT_LOG_CONTENT_MAX_CHARS", 2000
+)
+CV_MAKER_AGENT_LOG_MAX_BYTES = _positive_env_int(
+    "CV_MAKER_AGENT_LOG_MAX_BYTES", 5 * 1024 * 1024
+)
+CV_MAKER_AGENT_LOG_BACKUP_COUNT = _positive_env_int("CV_MAKER_AGENT_LOG_BACKUP_COUNT", 3)
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-ew=cscajumcgikky8*a+@1q$8+-=!d4*zx)^5@b8x0k4dhacpe'
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv("DJANGO_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "django-insecure-development-only"
+    else:
+        raise RuntimeError("DJANGO_SECRET_KEY must be set when DJANGO_DEBUG is false.")
 
 ALLOWED_HOSTS = []
 
@@ -133,10 +161,13 @@ LOGGING = {
     },
     "handlers": {
         "agent_file": {
-            "class": "logging.FileHandler",
+            "class": "logging.handlers.RotatingFileHandler",
             "filename": BASE_DIR / "agent.log",
             "formatter": "agent",
             "level": "INFO",
+            "maxBytes": CV_MAKER_AGENT_LOG_MAX_BYTES,
+            "backupCount": CV_MAKER_AGENT_LOG_BACKUP_COUNT,
+            "encoding": "utf-8",
         },
         "console": {
             "class": "logging.StreamHandler",
