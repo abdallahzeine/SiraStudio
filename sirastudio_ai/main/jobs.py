@@ -7,28 +7,44 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from .agent import run_agent
 
+JsonDict = dict[str, Any]
 
 logger = logging.getLogger("agent_logger")
 
-_DB_PATH = Path.home() / ".cv-maker" / "agent-jobs.sqlite"
+_db_path = Path.home() / ".cv-maker" / "agent-jobs.sqlite"
 _MAX_WORKERS_ENV = "CV_MAKER_JOB_WORKERS"
 _MESSAGE_PREVIEW_LENGTH = 180
 _THREAD_TITLE_LENGTH = 64
 
 _LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=int(os.getenv(_MAX_WORKERS_ENV, "2")))
-_DB_READY = False
-_JOB_EVENTS: dict[str, list[dict]] = {}
+_db_ready = False
+_JOB_EVENTS: dict[str, list[JsonDict]] = {}
+
+
+def get_db_path() -> Path:
+    return _db_path
+
+
+def set_db_path(path: Path) -> None:
+    global _db_path, _db_ready
+    _db_path = path
+    _db_ready = False
+
+
+def reset_job_events() -> None:
+    _JOB_EVENTS.clear()
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def append_job_event(job_id: str, event_type: str, data: dict) -> dict:
+def append_job_event(job_id: str, event_type: str, data: JsonDict) -> JsonDict:
     event = {
         "id": uuid.uuid4().hex,
         "job_id": job_id,
@@ -44,7 +60,7 @@ def append_job_event(job_id: str, event_type: str, data: dict) -> dict:
     return event
 
 
-def list_job_events(job_id: str, after_id: str | None = None) -> list[dict]:
+def list_job_events(job_id: str, after_id: str | None = None) -> list[JsonDict]:
     with _LOCK:
         events = list(_JOB_EVENTS.get(job_id, []))
     if after_id is None:
@@ -55,22 +71,22 @@ def list_job_events(job_id: str, after_id: str | None = None) -> list[dict]:
     return events[ids.index(after_id) + 1:]
 
 
-def _connect():
-    _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
+def _connect() -> sqlite3.Connection:
+    _db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(_db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def _init_db():
-    global _DB_READY
-    if _DB_READY:
+def _init_db() -> None:
+    global _db_ready
+    if _db_ready:
         return
     with _LOCK:
-        if _DB_READY:
+        if _db_ready:
             return
         conn = _connect()
-        conn.execute(
+        _ = conn.execute(
             """
             CREATE TABLE IF NOT EXISTS agent_jobs (
                 id TEXT PRIMARY KEY,
@@ -92,17 +108,17 @@ def _init_db():
         cursor = conn.execute("PRAGMA table_info(agent_jobs)")
         columns = {row["name"] for row in cursor.fetchall()}
         if "checkpoint_id" not in columns:
-            conn.execute("ALTER TABLE agent_jobs ADD COLUMN checkpoint_id TEXT")
+            _ = conn.execute("ALTER TABLE agent_jobs ADD COLUMN checkpoint_id TEXT")
         if "input_revision" not in columns:
-            conn.execute("ALTER TABLE agent_jobs ADD COLUMN input_revision INTEGER")
+            _ = conn.execute("ALTER TABLE agent_jobs ADD COLUMN input_revision INTEGER")
         if "message_preview" not in columns:
-            conn.execute("ALTER TABLE agent_jobs ADD COLUMN message_preview TEXT")
+            _ = conn.execute("ALTER TABLE agent_jobs ADD COLUMN message_preview TEXT")
         if "error_code" not in columns:
-            conn.execute("ALTER TABLE agent_jobs ADD COLUMN error_code TEXT")
-        conn.execute(
+            _ = conn.execute("ALTER TABLE agent_jobs ADD COLUMN error_code TEXT")
+        _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS agent_jobs_status_idx ON agent_jobs(status)"
         )
-        conn.execute(
+        _ = conn.execute(
             """
             CREATE TABLE IF NOT EXISTS agent_threads (
                 id TEXT PRIMARY KEY,
@@ -116,7 +132,7 @@ def _init_db():
             )
             """
         )
-        conn.execute(
+        _ = conn.execute(
             """
             CREATE TABLE IF NOT EXISTS agent_messages (
                 id TEXT PRIMARY KEY,
@@ -133,24 +149,24 @@ def _init_db():
             )
             """
         )
-        conn.execute(
+        _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS agent_threads_status_updated_idx ON agent_threads(status, updated_at)"
         )
-        conn.execute(
+        _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS agent_threads_user_updated_idx ON agent_threads(user_id, updated_at)"
         )
-        conn.execute(
+        _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS agent_messages_thread_created_idx ON agent_messages(thread_id, created_at)"
         )
-        conn.execute(
+        _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS agent_messages_job_idx ON agent_messages(job_id)"
         )
         conn.commit()
         conn.close()
-        _DB_READY = True
+        _db_ready = True
 
 
-def _update_job(job_id: str, **fields):
+def _update_job(job_id: str, **fields: Any) -> None:
     _init_db()
     if not fields:
         return
@@ -160,7 +176,7 @@ def _update_job(job_id: str, **fields):
     values.append(job_id)
     with _LOCK:
         conn = _connect()
-        conn.execute(f"UPDATE agent_jobs SET {columns} WHERE id = ?", values)
+        _ = conn.execute(f"UPDATE agent_jobs SET {columns} WHERE id = ?", values)
         conn.commit()
         conn.close()
 
@@ -180,7 +196,7 @@ def _clamp_limit(limit: int, maximum: int = 100) -> int:
     return max(1, min(limit, maximum))
 
 
-def _last_message_id(conn, thread_id: str) -> str | None:
+def _last_message_id(conn: sqlite3.Connection, thread_id: str) -> str | None:
     row = conn.execute(
         "SELECT id FROM agent_messages WHERE thread_id = ? ORDER BY created_at DESC LIMIT 1",
         (thread_id,),
@@ -188,7 +204,7 @@ def _last_message_id(conn, thread_id: str) -> str | None:
     return row["id"] if row else None
 
 
-def _thread_summary(conn, thread_id: str) -> dict | None:
+def _thread_summary(conn: sqlite3.Connection, thread_id: str) -> JsonDict | None:
     row = conn.execute("SELECT * FROM agent_threads WHERE id = ?", (thread_id,)).fetchone()
     if row is None:
         return None
@@ -205,7 +221,7 @@ def _thread_summary(conn, thread_id: str) -> dict | None:
     return summary
 
 
-def ensure_thread(thread_id: str, user_id: str | None = None, title: str | None = None) -> dict:
+def ensure_thread(thread_id: str, user_id: str | None = None, title: str | None = None) -> JsonDict:
     if not thread_id or not thread_id.strip():
         raise ValueError("thread_id is required")
     _init_db()
@@ -214,7 +230,7 @@ def ensure_thread(thread_id: str, user_id: str | None = None, title: str | None 
         conn = _connect()
         row = conn.execute("SELECT * FROM agent_threads WHERE id = ?", (thread_id,)).fetchone()
         if row is None:
-            conn.execute(
+            _ = conn.execute(
                 """
                 INSERT INTO agent_threads (id, user_id, title, status, created_at, updated_at)
                 VALUES (?, ?, ?, 'regular', ?, ?)
@@ -228,7 +244,7 @@ def ensure_thread(thread_id: str, user_id: str | None = None, title: str | None 
             if title and not row["title"]:
                 fields["title"] = title
             columns = ", ".join(f"{key} = ?" for key in fields.keys())
-            conn.execute(
+            _ = conn.execute(
                 f"UPDATE agent_threads SET {columns} WHERE id = ?",
                 [*fields.values(), thread_id],
             )
@@ -238,12 +254,12 @@ def ensure_thread(thread_id: str, user_id: str | None = None, title: str | None 
     return summary or {"id": thread_id}
 
 
-def create_thread(user_id: str | None = None, title: str | None = None) -> dict:
+def create_thread(user_id: str | None = None, title: str | None = None) -> JsonDict:
     thread_id = uuid.uuid4().hex
     return ensure_thread(thread_id, user_id=user_id, title=title or "New chat")
 
 
-def list_threads(limit: int = 50, status: str = "regular", user_id: str | None = None) -> list[dict]:
+def list_threads(limit: int = 50, status: str = "regular", user_id: str | None = None) -> list[JsonDict]:
     _init_db()
     limit = _clamp_limit(limit)
     params: list[object] = [status]
@@ -273,7 +289,7 @@ def list_threads(limit: int = 50, status: str = "regular", user_id: str | None =
     return result
 
 
-def get_thread(thread_id: str) -> dict | None:
+def get_thread(thread_id: str) -> JsonDict | None:
     _init_db()
     conn = _connect()
     summary = _thread_summary(conn, thread_id)
@@ -281,11 +297,11 @@ def get_thread(thread_id: str) -> dict | None:
     return summary
 
 
-def rename_thread(thread_id: str, title: str) -> dict | None:
+def rename_thread(thread_id: str, title: str) -> JsonDict | None:
     _init_db()
     with _LOCK:
         conn = _connect()
-        conn.execute(
+        _ = conn.execute(
             "UPDATE agent_threads SET title = ?, updated_at = ? WHERE id = ?",
             (title.strip(), _utc_now(), thread_id),
         )
@@ -295,19 +311,19 @@ def rename_thread(thread_id: str, title: str) -> dict | None:
     return summary
 
 
-def archive_thread(thread_id: str) -> dict | None:
+def archive_thread(thread_id: str) -> JsonDict | None:
     return _set_thread_status(thread_id, "archived")
 
 
-def delete_thread(thread_id: str) -> dict | None:
+def delete_thread(thread_id: str) -> JsonDict | None:
     return _set_thread_status(thread_id, "deleted")
 
 
-def _set_thread_status(thread_id: str, status: str) -> dict | None:
+def _set_thread_status(thread_id: str, status: str) -> JsonDict | None:
     _init_db()
     with _LOCK:
         conn = _connect()
-        conn.execute(
+        _ = conn.execute(
             "UPDATE agent_threads SET status = ?, updated_at = ? WHERE id = ?",
             (status, _utc_now(), thread_id),
         )
@@ -317,7 +333,7 @@ def _set_thread_status(thread_id: str, status: str) -> dict | None:
     return summary
 
 
-def list_thread_messages(thread_id: str, limit: int = 200) -> list[dict]:
+def list_thread_messages(thread_id: str, limit: int = 200) -> list[JsonDict]:
     _init_db()
     limit = _clamp_limit(limit, maximum=500)
     conn = _connect()
@@ -338,14 +354,14 @@ def append_thread_message(
     run_id: str | None = None,
     status: str = "completed",
     error: str | None = None,
-) -> dict:
+) -> JsonDict:
     _init_db()
     now = _utc_now()
     message_id = uuid.uuid4().hex
     with _LOCK:
         conn = _connect()
         parent_id = _last_message_id(conn, thread_id)
-        conn.execute(
+        _ = conn.execute(
             """
             INSERT INTO agent_messages (
                 id, thread_id, job_id, run_id, role, content, status, parent_id, created_at, updated_at, error
@@ -353,7 +369,7 @@ def append_thread_message(
             """,
             (message_id, thread_id, job_id, run_id, role, content, status, parent_id, now, now, error),
         )
-        conn.execute(
+        _ = conn.execute(
             """
             UPDATE agent_threads
             SET last_message_at = ?, updated_at = ?, last_job_id = COALESCE(?, last_job_id)
@@ -373,7 +389,7 @@ def update_message_status(
     content: str | None = None,
     error: str | None = None,
     run_id: str | None = None,
-) -> dict | None:
+) -> JsonDict | None:
     _init_db()
     fields: dict[str, object | None] = {"status": status, "updated_at": _utc_now()}
     if content is not None:
@@ -385,14 +401,14 @@ def update_message_status(
     columns = ", ".join(f"{key} = ?" for key in fields.keys())
     with _LOCK:
         conn = _connect()
-        conn.execute(f"UPDATE agent_messages SET {columns} WHERE id = ?", [*fields.values(), message_id])
+        _ = conn.execute(f"UPDATE agent_messages SET {columns} WHERE id = ?", [*fields.values(), message_id])
         conn.commit()
         row = conn.execute("SELECT * FROM agent_messages WHERE id = ?", (message_id,)).fetchone()
         conn.close()
     return dict(row) if row else None
 
 
-def _mark_failed(job_id: str, error: str, error_code: str | None = None):
+def _mark_failed(job_id: str, error: str, error_code: str | None = None) -> None:
     job = get_job(job_id)
     _update_job(job_id, status="failed", error=error, error_code=error_code)
     if job:
@@ -407,7 +423,7 @@ def _mark_failed(job_id: str, error: str, error_code: str | None = None):
         )
 
 
-def _mark_completed(job_id: str, result: dict):
+def _mark_completed(job_id: str, result: JsonDict) -> None:
     job = get_job(job_id)
     metadata = result.get("metadata", {})
     revision_mismatch = 1 if metadata.get("revision_mismatch") else 0
@@ -436,13 +452,13 @@ def _mark_completed(job_id: str, result: dict):
 
 def _run_job(
     job_id: str,
-    cv: dict,
+    cv: JsonDict,
     message: str,
     thread_id: str,
     user_id: str | None,
     checkpoint_id: str | None,
     input_revision: int | None,
-):
+) -> JsonDict:
     run_id = uuid.uuid4().hex
     _update_job(job_id, status="running", run_id=run_id)
     logger.info("AGENT_JOB_START | job_id=%s thread_id=%s run_id=%s", job_id, thread_id, run_id)
@@ -454,11 +470,11 @@ def _run_job(
         user_id=user_id,
         checkpoint_id=checkpoint_id,
         input_revision=input_revision,
-        on_tool_event=lambda event: append_job_event(job_id, "tool", event),
+        on_tool_event=lambda event: append_job_event(job_id, "tool", event),  # pyrefly: ignore
     )
 
 
-def _on_job_done(job_id: str, future):
+def _on_job_done(job_id: str, future: Any) -> None:
     if future.cancelled():
         _mark_failed(job_id, "cancelled")
         logger.warning("AGENT_JOB_CANCELLED | job_id=%s", job_id)
@@ -474,7 +490,7 @@ def _on_job_done(job_id: str, future):
 
 
 def create_job(
-    cv: dict,
+    cv: JsonDict,
     message: str,
     thread_id: str,
     user_id: str | None = None,
@@ -486,16 +502,16 @@ def create_job(
     now = _utc_now()
     cv_json = json.dumps(cv or {}, ensure_ascii=False)
     preview = _message_preview(message)
-    ensure_thread(thread_id, user_id=user_id)
+    _ = ensure_thread(thread_id, user_id=user_id)
     with _LOCK:
         conn = _connect()
         thread = conn.execute("SELECT title FROM agent_threads WHERE id = ?", (thread_id,)).fetchone()
         if thread and (not thread["title"] or thread["title"] == "New chat"):
-            conn.execute(
+            _ = conn.execute(
                 "UPDATE agent_threads SET title = ?, updated_at = ? WHERE id = ?",
                 (_thread_title(message), now, thread_id),
             )
-        conn.execute(
+        _ = conn.execute(
             """
             INSERT INTO agent_jobs (
                 id, status, created_at, updated_at, thread_id, user_id, message, cv_json,
@@ -517,7 +533,7 @@ def create_job(
             ),
         )
         parent_id = _last_message_id(conn, thread_id)
-        conn.execute(
+        _ = conn.execute(
             """
             INSERT INTO agent_messages (
                 id, thread_id, job_id, role, content, status, parent_id, created_at, updated_at
@@ -525,7 +541,7 @@ def create_job(
             """,
             (uuid.uuid4().hex, thread_id, job_id, message, parent_id, now, now),
         )
-        conn.execute(
+        _ = conn.execute(
             """
             UPDATE agent_threads
             SET last_message_at = ?, updated_at = ?, last_job_id = ?
@@ -541,7 +557,7 @@ def create_job(
     return job_id
 
 
-def get_job(job_id: str) -> dict | None:
+def get_job(job_id: str) -> JsonDict | None:
     _init_db()
     conn = _connect()
     row = conn.execute("SELECT * FROM agent_jobs WHERE id = ?", (job_id,)).fetchone()
@@ -551,7 +567,7 @@ def get_job(job_id: str) -> dict | None:
     return dict(row)
 
 
-def list_recent_jobs(limit: int = 50) -> list[dict]:
+def list_recent_jobs(limit: int = 50) -> list[JsonDict]:
     _init_db()
     conn = _connect()
     rows = conn.execute(
@@ -565,7 +581,7 @@ def list_recent_jobs(limit: int = 50) -> list[dict]:
 def jobs_db_available() -> bool:
     _init_db()
     conn = _connect()
-    conn.execute("SELECT 1").fetchone()
+    _ = conn.execute("SELECT 1").fetchone()
     conn.close()
     return True
 

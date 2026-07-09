@@ -1,3 +1,19 @@
 project-includes = [
     "**/*.py*",
 ]
+
+# These frameworks expose dynamic APIs and incomplete type stubs in this project.
+replace-imports-with-any = [
+    "django",
+    "django.*",
+    "ninja",
+    "ninja.*",
+    "langgraph",
+    "langgraph.*",
+]
+
+[errors]
+explicit-any = false
+implicit-any = false
+missing-import = false
+untyped-import = false
