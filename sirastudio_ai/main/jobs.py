@@ -16,14 +16,38 @@ JsonDict = dict[str, Any]
 logger = logging.getLogger("agent_logger")
 
 _db_path = Path.home() / ".cv-maker" / "agent-jobs.sqlite"
+_MAX_PENDING_JOBS_ENV = "CV_MAKER_MAX_PENDING_JOBS"
+_MAX_RUNNING_JOBS_ENV = "CV_MAKER_MAX_RUNNING_JOBS"
 _MAX_WORKERS_ENV = "CV_MAKER_JOB_WORKERS"
+_DEFAULT_MAX_PENDING_JOBS = 20
+_DEFAULT_MAX_RUNNING_JOBS = 2
 _MESSAGE_PREVIEW_LENGTH = 180
 _THREAD_TITLE_LENGTH = 64
 
-_LOCK = threading.Lock()
-_EXECUTOR = ThreadPoolExecutor(max_workers=int(os.getenv(_MAX_WORKERS_ENV, "2")))
+_LOCK = threading.RLock()
 _db_ready = False
 _JOB_EVENTS: dict[str, list[JsonDict]] = {}
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        logger.warning("Invalid %s value; using %s", name, default)
+        return default
+
+
+_MAX_PENDING_JOBS = _positive_env_int(_MAX_PENDING_JOBS_ENV, _DEFAULT_MAX_PENDING_JOBS)
+_MAX_RUNNING_JOBS = _positive_env_int(
+    _MAX_RUNNING_JOBS_ENV,
+    _positive_env_int(_MAX_WORKERS_ENV, _DEFAULT_MAX_RUNNING_JOBS),
+)
+_EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_RUNNING_JOBS)
+
+
+class JobCapacityExceeded(Exception):
+    code = "JOB_CAPACITY_EXCEEDED"
+    message = "Agent job capacity is currently full. Please try again shortly."
 
 
 def get_db_path() -> Path:
@@ -502,8 +526,22 @@ def create_job(
     now = _utc_now()
     cv_json = json.dumps(cv or {}, ensure_ascii=False)
     preview = _message_preview(message)
-    _ = ensure_thread(thread_id, user_id=user_id)
     with _LOCK:
+        conn = _connect()
+        counts = {
+            row["status"]: row["count"]
+            for row in conn.execute(
+                "SELECT status, COUNT(*) AS count FROM agent_jobs WHERE status IN ('queued', 'running') GROUP BY status"
+            ).fetchall()
+        }
+        conn.close()
+        if (
+            counts.get("running", 0) >= _MAX_RUNNING_JOBS
+            or counts.get("queued", 0) >= _MAX_PENDING_JOBS
+        ):
+            raise JobCapacityExceeded
+
+        _ = ensure_thread(thread_id, user_id=user_id)
         conn = _connect()
         thread = conn.execute("SELECT title FROM agent_threads WHERE id = ?", (thread_id,)).fetchone()
         if thread and (not thread["title"] or thread["title"] == "New chat"):

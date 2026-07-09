@@ -4,11 +4,12 @@ import time
 from typing import Any
 
 from django.http import StreamingHttpResponse
-from ninja import Router
+from ninja import Router, Status
 from ninja.errors import HttpError
 
 from .agent import (
     EditRequest,
+    JobCapacityErrorResponse,
     JobCreateResponse,
     JobStatusResponse,
     ThreadCreateRequest,
@@ -27,6 +28,7 @@ from .jobs import (
     executor_available,
     get_job,
     get_thread,
+    JobCapacityExceeded,
     jobs_db_available,
     list_job_events,
     list_thread_messages,
@@ -113,16 +115,23 @@ def _sse_event(event: str, data: JsonDict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-@router.post("/edit", response=JobCreateResponse, summary="Edit CV via AI agent")
-def edit_cv(request, body: EditRequest) -> dict[str, str]:
-    job_id = create_job(
-        body.cv,
-        body.message,
-        body.thread_id,
-        body.user_id,
-        body.checkpoint_id,
-        body.revision,
-    )
+@router.post(
+    "/edit",
+    response={200: JobCreateResponse, 429: JobCapacityErrorResponse},
+    summary="Edit CV via AI agent",
+)
+def edit_cv(request, body: EditRequest):
+    try:
+        job_id = create_job(
+            body.cv,
+            body.message,
+            body.thread_id,
+            body.user_id,
+            body.checkpoint_id,
+            body.revision,
+        )
+    except JobCapacityExceeded as error:
+        return Status(429, {"code": error.code, "message": error.message})
     return {"job_id": job_id}
 
 

@@ -58,6 +58,11 @@ class JobCreateResponse(BaseModel):
     )
 
 
+class JobCapacityErrorResponse(BaseModel):
+    code: Literal["JOB_CAPACITY_EXCEEDED"]
+    message: str
+
+
 class JobStatusResponse(BaseModel):
     job_id: str = Field(
         ...,

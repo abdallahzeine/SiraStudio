@@ -1,6 +1,8 @@
 ﻿import json
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
@@ -178,6 +180,93 @@ class AgentBackendSmokeTests(TestCase):
             body = b"".join(events.streaming_content).decode("utf-8")
             self.assertIn("event: tool", body)
             self.assertIn("event: completed", body)
+
+    def test_agent_job_capacity_rejects_and_recovers(self) -> None:
+        dispatch_started = threading.Event()
+        dispatch_release = threading.Event()
+        agent_started = threading.Event()
+        agent_release = threading.Event()
+        original_executor = jobs._EXECUTOR
+        original_max_pending = jobs._MAX_PENDING_JOBS
+        original_max_running = jobs._MAX_RUNNING_JOBS
+        test_executor = ThreadPoolExecutor(max_workers=1)
+        jobs._EXECUTOR = test_executor
+        jobs._MAX_PENDING_JOBS = 1
+        jobs._MAX_RUNNING_JOBS = 1
+
+        def fake_run_agent(
+            cv: dict[str, Any],
+            message: str,
+            thread_id: str,
+            run_id: str | None = None,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            agent_started.set()
+            self.assertTrue(agent_release.wait(timeout=2))
+            return {"cv": cv, "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
+
+        original_run_job = jobs._run_job
+
+        def delay_job_start(*args: Any) -> dict[str, Any]:
+            dispatch_started.set()
+            self.assertTrue(dispatch_release.wait(timeout=2))
+            return original_run_job(*args)
+
+        def submit(thread_id: str) -> Any:
+            return self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": {"header": {}, "sections": []},
+                        "message": "Read my CV",
+                        "thread_id": thread_id,
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        try:
+            with patch("main.jobs.run_agent", fake_run_agent), patch("main.jobs._run_job", delay_job_start):
+                first = submit("capacity-test-first")
+                self.assertEqual(first.status_code, 200)
+                first_job_id = first.json()["job_id"]
+                self.assertTrue(dispatch_started.wait(timeout=2))
+
+                pending_rejection = submit("capacity-test-pending")
+                self.assertEqual(pending_rejection.status_code, 429)
+                self.assertEqual(
+                    pending_rejection.json(),
+                    {
+                        "code": "JOB_CAPACITY_EXCEEDED",
+                        "message": "Agent job capacity is currently full. Please try again shortly.",
+                    },
+                )
+                self.assertEqual(len(jobs.list_recent_jobs()), 1)
+
+                dispatch_release.set()
+                self.assertTrue(agent_started.wait(timeout=2))
+
+                running_rejection = submit("capacity-test-running")
+                self.assertEqual(running_rejection.status_code, 429)
+                self.assertEqual(running_rejection.json()["code"], "JOB_CAPACITY_EXCEEDED")
+                self.assertEqual(len(jobs.list_recent_jobs()), 1)
+
+                agent_release.set()
+                self.assertEqual(self._wait_for_job(first_job_id)["status"], "completed")
+
+                accepted_after_completion = submit("capacity-test-after-completion")
+                self.assertEqual(accepted_after_completion.status_code, 200)
+                self.assertEqual(
+                    self._wait_for_job(accepted_after_completion.json()["job_id"])["status"],
+                    "completed",
+                )
+        finally:
+            dispatch_release.set()
+            agent_release.set()
+            test_executor.shutdown(wait=True)
+            jobs._EXECUTOR = original_executor
+            jobs._MAX_PENDING_JOBS = original_max_pending
+            jobs._MAX_RUNNING_JOBS = original_max_running
 
     def _wait_for_job(self, job_id: str) -> dict[str, Any]:
         for _ in range(40):
