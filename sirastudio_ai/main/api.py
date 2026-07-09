@@ -6,11 +6,12 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from django.http import StreamingHttpResponse
-from ninja import Router
+from ninja import Router, Status
 from ninja.errors import HttpError
 
 from .agent import (
     EditRequest,
+    JobCapacityErrorResponse,
     JobCreateResponse,
     JobStatusResponse,
     ThreadCreateRequest,
@@ -30,6 +31,7 @@ from .jobs import (
     executor_available,
     failure_message,
     get_thread,
+    JobCapacityExceeded,
     job_status_payload,
     jobs_db_available,
     list_job_events,
@@ -104,8 +106,12 @@ def _sse_cursor(request) -> int:
         return 0
 
 
-@router.post("/edit", response=JobCreateResponse, summary="Edit CV via AI agent")
-def edit_cv(request, body: EditRequest) -> dict[str, str]:
+@router.post(
+    "/edit",
+    response={200: JobCreateResponse, 429: JobCapacityErrorResponse},
+    summary="Edit CV via AI agent",
+)
+def edit_cv(request, body: EditRequest):
     try:
         job_id = create_job(
             body.cv,
@@ -115,6 +121,8 @@ def edit_cv(request, body: EditRequest) -> dict[str, str]:
             body.checkpoint_id,
             body.revision,
         )
+    except JobCapacityExceeded as error:
+        return Status(429, {"code": error.code, "message": error.message})
     except ThreadNotFoundError:
         raise HttpError(404, "Thread not found")
     return {"job_id": job_id}
