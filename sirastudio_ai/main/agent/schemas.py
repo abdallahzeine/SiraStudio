@@ -1,9 +1,12 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
-from typing import Any, Literal
+
+from ..cv_schema import CVDataInput, CVDataOutput, OptionalCVDataOutput
 
 
 class EditRequest(BaseModel):
-    cv: dict[str, Any] = Field(
+    cv: CVDataInput = Field(
         ...,
         description="Full CVData JSON from the frontend. Contains header, sections, template.",
     )
@@ -33,7 +36,7 @@ class EditRequest(BaseModel):
 
 
 class EditResponse(BaseModel):
-    cv: dict[str, Any] = Field(
+    cv: CVDataOutput = Field(
         ...,
         description="Updated CVData JSON after the agent applied edits via tools.",
     )
@@ -87,7 +90,7 @@ class JobStatusResponse(BaseModel):
         None,
         description="Agent reply when available.",
     )
-    cv: dict[str, Any] | None = Field(
+    cv: OptionalCVDataOutput = Field(
         None,
         description="Updated CVData JSON when job is completed.",
     )

@@ -1,10 +1,12 @@
-import copy
 import json
 import re
 from typing import Annotated, Any
 
 from langchain.tools import tool
 from langgraph.prebuilt import InjectedState
+
+from ...cv_schema import CVData
+from .helpers import parse_injected_cv
 
 
 _PROP_RE = re.compile(r"[A-Za-z0-9_$-]+")
@@ -60,7 +62,7 @@ def _parse_path(path: str) -> tuple[bool, list[str | int], str | None]:
     return True, tokens, None
 
 
-def _get_value(root: Any, tokens: list[str | int], path: str) -> tuple[bool, Any, str | None]:
+def _get_value(root: dict[str, Any], tokens: list[str | int], path: str) -> tuple[bool, Any, str | None]:
     current = root
     for token in tokens:
         if isinstance(token, str):
@@ -77,7 +79,7 @@ def _get_value(root: Any, tokens: list[str | int], path: str) -> tuple[bool, Any
     return True, current, None
 
 
-def _get_parent(root: Any, tokens: list[str | int], path: str) -> tuple[bool, Any, str | int | None, str | None]:
+def _get_parent(root: dict[str, Any], tokens: list[str | int], path: str) -> tuple[bool, Any, str | int | None, str | None]:
     if not tokens:
         return True, None, None, None
     ok, parent, err = _get_value(root, tokens[:-1], path)
@@ -86,85 +88,88 @@ def _get_parent(root: Any, tokens: list[str | int], path: str) -> tuple[bool, An
     return True, parent, tokens[-1], None
 
 
-def _apply_edit(cv: dict, op: str, path: str, value: Any = None) -> tuple[bool, str | None]:
+def _stage_edit(candidate: dict[str, Any], op: str, path: str, value: Any = None) -> tuple[bool, dict[str, Any] | None, str | None]:
     path_ok, tokens, path_error = _parse_path(path)
     if not path_ok:
-        return False, path_error
+        return False, None, path_error
 
     if op == "append":
-        ok, target, err = _get_value(cv, tokens, path)
+        ok, target, err = _get_value(candidate, tokens, path)
         if not ok:
-            return False, err
+            return False, None, err
         if not isinstance(target, list):
-            return False, f"Append target must be a list at path '{path}'."
+            return False, None, f"Append target must be a list at path '{path}'."
         target.append(value)
-        return True, None
+        return True, candidate, None
 
     if op == "merge":
-        ok, target, err = _get_value(cv, tokens, path)
+        ok, target, err = _get_value(candidate, tokens, path)
         if not ok:
-            return False, err
+            return False, None, err
         if not isinstance(target, dict):
-            return False, f"Merge target must be an object at path '{path}'."
+            return False, None, f"Merge target must be an object at path '{path}'."
         if not isinstance(value, dict):
-            return False, "Merge value must be an object."
+            return False, None, "Merge value must be an object."
         target.update(value)
-        return True, None
+        return True, candidate, None
 
     if op == "set":
         if not tokens:
             if not isinstance(value, dict):
-                return False, "Root set value must be a CV object."
-            cv.clear()
-            cv.update(value)
-            return True, None
+                return False, None, "Root set value must be a CV object."
+            return True, value, None
 
-        ok, parent, final_token, err = _get_parent(cv, tokens, path)
+        ok, parent, final_token, err = _get_parent(candidate, tokens, path)
         if not ok:
-            return False, err
+            return False, None, err
         if isinstance(final_token, str):
             if not isinstance(parent, dict):
-                return False, f"Set parent must be an object at path '{path}'."
+                return False, None, f"Set parent must be an object at path '{path}'."
             parent[final_token] = value
-            return True, None
+            return True, candidate, None
         if not isinstance(parent, list):
-            return False, f"Set parent must be a list at path '{path}'."
+            return False, None, f"Set parent must be a list at path '{path}'."
         if final_token < 0 or final_token >= len(parent):
-            return False, f"Index [{final_token}] is out of bounds at path '{path}'."
+            return False, None, f"Index [{final_token}] is out of bounds at path '{path}'."
         parent[final_token] = value
-        return True, None
+        return True, candidate, None
 
     if op == "delete":
         if not tokens:
-            return False, "Delete does not support the root CV path."
-        ok, parent, final_token, err = _get_parent(cv, tokens, path)
+            return False, None, "Delete does not support the root CV path."
+        ok, parent, final_token, err = _get_parent(candidate, tokens, path)
         if not ok:
-            return False, err
+            return False, None, err
         if isinstance(final_token, str):
             if not isinstance(parent, dict):
-                return False, f"Delete parent must be an object at path '{path}'."
+                return False, None, f"Delete parent must be an object at path '{path}'."
             if final_token not in parent:
-                return False, f"Property '{final_token}' was not found at path '{path}'."
+                return False, None, f"Property '{final_token}' was not found at path '{path}'."
             del parent[final_token]
-            return True, None
+            return True, candidate, None
         if not isinstance(parent, list):
-            return False, f"Delete parent must be a list at path '{path}'."
+            return False, None, f"Delete parent must be a list at path '{path}'."
         if final_token < 0 or final_token >= len(parent):
-            return False, f"Index [{final_token}] is out of bounds at path '{path}'."
+            return False, None, f"Index [{final_token}] is out of bounds at path '{path}'."
         parent.pop(final_token)
-        return True, None
+        return True, candidate, None
 
-    return False, "Unsupported op. Use set, merge, append, or delete."
+    return False, None, "Unsupported op. Use set, merge, append, or delete."
+
+
+def _commit_cv_state(cv: dict[str, Any], next_cv: CVData) -> None:
+    cv.clear()
+    cv.update(next_cv.model_dump(by_alias=True))
 
 
 @tool
 def edit_cv_path(
-    cv: Annotated[dict, InjectedState("cv")],
+    cv: Annotated[dict[str, Any], InjectedState("cv")],
     op: str,
     path: str,
     value: Any = None,
 ) -> str:
-    """Edit the CV by applying one path operation to the current CV dict.
+    """Edit the CV by applying one path operation to the current typed CV.
 
     Supported operations:
     - op="set": set a scalar/object/list at a path, e.g. path="header.name".
@@ -174,17 +179,22 @@ def edit_cv_path(
 
     Do not use [-1]. For append, point path at the array itself.
     """
-    if not isinstance(cv, dict):
-        return _error("Current CV state is not an object.", path)
     if not isinstance(path, str):
         return _error("Path must be a string.")
 
+    cv_model, current_error = parse_injected_cv(cv)
+    if cv_model is None:
+        return _error(current_error or "Current CV state is not valid.", path)
+
     normalized_op = str(op or "").strip().lower()
-    next_cv = copy.deepcopy(cv)
-    ok, err = _apply_edit(next_cv, normalized_op, path, value)
+    candidate = cv_model.model_dump(by_alias=True)
+    ok, staged_cv, err = _stage_edit(candidate, normalized_op, path, value)
     if not ok:
         return _error(err or "Could not apply CV edit.", path)
 
-    cv.clear()
-    cv.update(next_cv)
+    next_cv, validation_error = parse_injected_cv(staged_cv or {})
+    if next_cv is None:
+        return _error(validation_error or "CV edit would create invalid CV data.", path)
+
+    _commit_cv_state(cv, next_cv)
     return _ok(path, normalized_op)
