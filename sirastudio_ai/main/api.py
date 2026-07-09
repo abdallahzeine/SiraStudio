@@ -27,6 +27,7 @@ from .jobs import (
     executor_available,
     get_job,
     get_thread,
+    failure_message,
     jobs_db_available,
     list_job_events,
     list_thread_messages,
@@ -56,17 +57,25 @@ def _thread_response(record: JsonDict) -> JsonDict:
 
 
 def _message_response(record: JsonDict) -> JsonDict:
+    status = record.get("status") or "completed"
+    if status == "failed":
+        error = failure_message(record.get("job_error_code") or "AGENT_FAILED")
+        content = error
+    else:
+        error = record.get("error")
+        content = record.get("content") or ""
+
     return {
         "id": record.get("id"),
         "thread_id": record.get("thread_id"),
         "role": record.get("role"),
-        "content": record.get("content") or "",
-        "status": record.get("status") or "completed",
+        "content": content,
+        "status": status,
         "created_at": record.get("created_at"),
         "updated_at": record.get("updated_at"),
         "job_id": record.get("job_id"),
         "run_id": record.get("run_id"),
-        "error": record.get("error"),
+        "error": error,
     }
 
 
@@ -82,7 +91,12 @@ def _require_thread(thread_id: str) -> JsonDict:
 def _job_status_payload(job_id: str) -> JsonDict:
     record = get_job(job_id)
     if record is None:
-        return {"job_id": job_id, "status": "failed", "error": "Job not found"}
+        return {
+            "job_id": job_id,
+            "status": "failed",
+            "error": "Job not found.",
+            "error_code": "JOB_NOT_FOUND",
+        }
 
     status = record.get("status")
     cv = None
@@ -93,6 +107,7 @@ def _job_status_payload(job_id: str) -> JsonDict:
             cv = json.loads(cv_json)
         revision_mismatch = bool(record.get("revision_mismatch"))
 
+    error_code = record.get("error_code") if status == "failed" else None
     return {
         "job_id": job_id,
         "status": status,
@@ -104,8 +119,8 @@ def _job_status_payload(job_id: str) -> JsonDict:
         "cv": cv,
         "run_id": record.get("run_id"),
         "revision_mismatch": revision_mismatch,
-        "error": record.get("error") if status == "failed" else None,
-        "error_code": record.get("error_code") if status == "failed" else None,
+        "error": failure_message(error_code or "AGENT_FAILED") if status == "failed" else None,
+        "error_code": error_code or "AGENT_FAILED" if status == "failed" else None,
     }
 
 
@@ -205,7 +220,15 @@ def job_events(request, job_id: str):
 
             time.sleep(_SSE_POLL_SECONDS)
 
-        yield _sse_event("failed", {"job_id": job_id, "status": "failed", "error": "Agent job timed out."})
+        yield _sse_event(
+            "failed",
+            {
+                "job_id": job_id,
+                "status": "failed",
+                "error": "The agent job did not finish in time. Please try again.",
+                "error_code": "JOB_TIMEOUT",
+            },
+        )
 
     response = StreamingHttpResponse(stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"

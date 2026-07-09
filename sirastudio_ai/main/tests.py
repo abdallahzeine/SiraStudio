@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
 
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 
 from . import jobs
 
@@ -178,6 +178,93 @@ class AgentBackendSmokeTests(TestCase):
             body = b"".join(events.streaming_content).decode("utf-8")
             self.assertIn("event: tool", body)
             self.assertIn("event: completed", body)
+
+    def test_agent_error_responses_are_safe(self) -> None:
+        malformed: Any = self.client.post(
+            "/api/agent/edit",
+            data=b'{"cv":',
+            content_type="application/json",
+        )
+        self.assertEqual(malformed.status_code, 400)
+        self.assertEqual(
+            malformed.json(),
+            {"code": "INVALID_JSON", "message": "Request body must be valid JSON."},
+        )
+
+        request_failure = RuntimeError("provider credentials leaked")
+        with override_settings(DEBUG=True), patch("main.api.create_job", side_effect=request_failure):
+            failed_request: Any = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": {"header": {}, "sections": []},
+                        "message": "Update my CV",
+                        "thread_id": "request-error",
+                    }
+                ),
+                content_type="application/json",
+            )
+        self.assertEqual(failed_request.status_code, 500)
+        self.assertEqual(
+            failed_request.json(),
+            {
+                "code": "AGENT_REQUEST_FAILED",
+                "message": "The agent request could not be completed. Please try again.",
+            },
+        )
+        self.assertNotIn("provider credentials leaked", failed_request.content.decode())
+        self.assertNotIn("Traceback", failed_request.content.decode())
+
+        def failing_run_agent(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("provider credentials leaked")
+
+        with patch("main.jobs.run_agent", failing_run_agent):
+            edit: Any = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": {"header": {}, "sections": []},
+                        "message": "Update my CV",
+                        "thread_id": "job-error",
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(edit.status_code, 200)
+            self.assertEqual(set(edit.json()), {"job_id"})
+            status = self._wait_for_job(edit.json()["job_id"])
+
+        self.assertEqual(status["status"], "failed")
+        self.assertEqual(status["error_code"], "AGENT_FAILED")
+        self.assertEqual(status["error"], "The agent could not complete your request. Please try again.")
+        self.assertNotIn("provider credentials leaked", json.dumps(status))
+        stored_job = jobs.get_job(edit.json()["job_id"])
+        self.assertEqual(stored_job["error_code"], "AGENT_FAILED")
+        self.assertEqual(stored_job["error"], "The agent could not complete your request. Please try again.")
+
+        failed_message = next(
+            message
+            for message in jobs.list_thread_messages("job-error")
+            if message["status"] == "failed"
+        )
+        raw_error = "provider credentials leaked from legacy thread history"
+        jobs.update_message_status(
+            failed_message["id"],
+            "failed",
+            content=raw_error,
+            error=raw_error,
+        )
+        thread: Any = self.client.get("/api/agent/threads/job-error")
+        self.assertEqual(thread.status_code, 200)
+        projected_message = next(
+            message
+            for message in thread.json()["messages"]
+            if message["id"] == failed_message["id"]
+        )
+        self.assertEqual(projected_message["content"], "The agent could not complete your request. Please try again.")
+        self.assertEqual(projected_message["error"], "The agent could not complete your request. Please try again.")
+        self.assertEqual(thread.json()["message_preview"], "The agent could not complete your request. Please try again.")
+        self.assertNotIn(raw_error, json.dumps(thread.json()))
 
     def _wait_for_job(self, job_id: str) -> dict[str, Any]:
         for _ in range(40):

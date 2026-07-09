@@ -19,6 +19,10 @@ _db_path = Path.home() / ".cv-maker" / "agent-jobs.sqlite"
 _MAX_WORKERS_ENV = "CV_MAKER_JOB_WORKERS"
 _MESSAGE_PREVIEW_LENGTH = 180
 _THREAD_TITLE_LENGTH = 64
+_FAILURE_MESSAGES = {
+    "AGENT_FAILED": "The agent could not complete your request. Please try again.",
+    "JOB_INTERRUPTED": "The agent job was interrupted. Please try again.",
+}
 
 _LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=int(os.getenv(_MAX_WORKERS_ENV, "2")))
@@ -42,6 +46,10 @@ def reset_job_events() -> None:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def failure_message(error_code: str) -> str:
+    return _FAILURE_MESSAGES.get(error_code, _FAILURE_MESSAGES["AGENT_FAILED"])
 
 
 def append_job_event(job_id: str, event_type: str, data: JsonDict) -> JsonDict:
@@ -211,13 +219,19 @@ def _thread_summary(conn: sqlite3.Connection, thread_id: str) -> JsonDict | None
     summary = dict(row)
     message = conn.execute(
         """
-        SELECT content FROM agent_messages
-        WHERE thread_id = ? AND content != ''
-        ORDER BY created_at DESC LIMIT 1
+        SELECT m.content, m.status, j.error_code AS job_error_code
+        FROM agent_messages m
+        LEFT JOIN agent_jobs j ON j.id = m.job_id
+        WHERE m.thread_id = ? AND m.content != ''
+        ORDER BY m.created_at DESC LIMIT 1
         """,
         (thread_id,),
     ).fetchone()
-    summary["message_preview"] = _message_preview(message["content"]) if message else None
+    if message and message["status"] == "failed":
+        content = failure_message(message["job_error_code"] or "AGENT_FAILED")
+    else:
+        content = message["content"] if message else ""
+    summary["message_preview"] = _message_preview(content) or None
     return summary
 
 
@@ -272,7 +286,9 @@ def list_threads(limit: int = 50, status: str = "regular", user_id: str | None =
     rows = conn.execute(
         f"""
         SELECT t.*,
-            (SELECT m.content FROM agent_messages m WHERE m.thread_id = t.id AND m.content != '' ORDER BY m.created_at DESC LIMIT 1) AS message_preview
+            (SELECT m.content FROM agent_messages m WHERE m.thread_id = t.id AND m.content != '' ORDER BY m.created_at DESC LIMIT 1) AS message_preview,
+            (SELECT m.status FROM agent_messages m WHERE m.thread_id = t.id AND m.content != '' ORDER BY m.created_at DESC LIMIT 1) AS message_status,
+            (SELECT j.error_code FROM agent_messages m LEFT JOIN agent_jobs j ON j.id = m.job_id WHERE m.thread_id = t.id AND m.content != '' ORDER BY m.created_at DESC LIMIT 1) AS job_error_code
         FROM agent_threads t
         WHERE t.status = ?{user_clause}
         ORDER BY COALESCE(t.last_message_at, t.updated_at) DESC
@@ -284,7 +300,11 @@ def list_threads(limit: int = 50, status: str = "regular", user_id: str | None =
     result = []
     for row in rows:
         item = dict(row)
-        item["message_preview"] = _message_preview(item.get("message_preview") or "") or None
+        if item.get("message_status") == "failed":
+            content = failure_message(item.get("job_error_code") or "AGENT_FAILED")
+        else:
+            content = item.get("message_preview") or ""
+        item["message_preview"] = _message_preview(content) or None
         result.append(item)
     return result
 
@@ -338,7 +358,14 @@ def list_thread_messages(thread_id: str, limit: int = 200) -> list[JsonDict]:
     limit = _clamp_limit(limit, maximum=500)
     conn = _connect()
     rows = conn.execute(
-        "SELECT * FROM agent_messages WHERE thread_id = ? ORDER BY created_at ASC LIMIT ?",
+        """
+        SELECT m.*, j.error_code AS job_error_code
+        FROM agent_messages m
+        LEFT JOIN agent_jobs j ON j.id = m.job_id
+        WHERE m.thread_id = ?
+        ORDER BY m.created_at ASC
+        LIMIT ?
+        """,
         (thread_id, limit),
     ).fetchall()
     conn.close()
@@ -408,8 +435,9 @@ def update_message_status(
     return dict(row) if row else None
 
 
-def _mark_failed(job_id: str, error: str, error_code: str | None = None) -> None:
+def _mark_failed(job_id: str, error_code: str) -> None:
     job = get_job(job_id)
+    error = failure_message(error_code)
     _update_job(job_id, status="failed", error=error, error_code=error_code)
     if job:
         append_thread_message(
@@ -476,12 +504,12 @@ def _run_job(
 
 def _on_job_done(job_id: str, future: Any) -> None:
     if future.cancelled():
-        _mark_failed(job_id, "cancelled")
+        _mark_failed(job_id, "JOB_INTERRUPTED")
         logger.warning("AGENT_JOB_CANCELLED | job_id=%s", job_id)
         return
     error = future.exception()
     if error is not None:
-        _mark_failed(job_id, str(error))
+        _mark_failed(job_id, "AGENT_FAILED")
         logger.warning("AGENT_JOB_FAILED | job_id=%s error=%s", job_id, str(error)[:300])
         return
     result = future.result()
