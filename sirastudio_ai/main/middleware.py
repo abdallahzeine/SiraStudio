@@ -3,11 +3,18 @@ import time
 import logging
 from datetime import datetime, timezone
 
+from django.http import JsonResponse
+
 logger = logging.getLogger("agent_logger")
+
+_INVALID_JSON = {
+    "code": "INVALID_JSON",
+    "message": "Request body must be valid JSON.",
+}
 
 
 class AgentLoggingMiddleware:
-    AGENT_PATH_PREFIX = "/api/agent"
+    AGENT_PATH_PREFIX = "/api/agent/"
 
     def __init__(self, get_response):
         self.get_response = get_response
@@ -15,6 +22,12 @@ class AgentLoggingMiddleware:
     def __call__(self, request):
         if not request.path.startswith(self.AGENT_PATH_PREFIX):
             return self.get_response(request)
+
+        if request.body and request.content_type == "application/json":
+            try:
+                json.loads(request.body)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                return JsonResponse(_INVALID_JSON, status=400)
 
         start = time.monotonic()
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -66,14 +79,14 @@ class AgentLoggingMiddleware:
 
         return response
 
-
 def _parse_json(raw):
     if isinstance(raw, bytes):
         raw = raw.decode("utf-8", errors="replace")
     if isinstance(raw, str):
         raw = raw.strip()
         if raw and raw[0] in "{[":
-            return json.loads(raw)
+            value = json.loads(raw)
+            return value if isinstance(value, dict) else {}
     return {}
 
 

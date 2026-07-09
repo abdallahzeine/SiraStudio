@@ -21,6 +21,10 @@ _MESSAGE_PREVIEW_LENGTH = 180
 _THREAD_TITLE_LENGTH = 64
 JOB_INTERRUPTED = "JOB_INTERRUPTED"
 JOB_INTERRUPTED_MESSAGE = "The agent job was interrupted while the service restarted. Please try again."
+_FAILURE_MESSAGES = {
+    "AGENT_FAILED": "The agent could not complete your request. Please try again.",
+    JOB_INTERRUPTED: JOB_INTERRUPTED_MESSAGE,
+}
 
 _LOCK = threading.Lock()
 _EXECUTOR = ThreadPoolExecutor(max_workers=int(os.getenv(_MAX_WORKERS_ENV, "2")))
@@ -48,6 +52,10 @@ def reset_job_events() -> None:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def failure_message(error_code: str) -> str:
+    return _FAILURE_MESSAGES.get(error_code, _FAILURE_MESSAGES["AGENT_FAILED"])
 
 
 def append_job_event(job_id: str, event_type: str, data: JsonDict) -> JsonDict:
@@ -221,7 +229,12 @@ def _init_db() -> None:
 
 def _job_status_payload_from_record(job_id: str, record: JsonDict | None) -> JsonDict:
     if record is None:
-        return {"job_id": job_id, "status": "failed", "error": "Job not found"}
+        return {
+            "job_id": job_id,
+            "status": "failed",
+            "error": "Job not found.",
+            "error_code": "JOB_NOT_FOUND",
+        }
 
     status = record.get("status")
     cv = None
@@ -232,6 +245,7 @@ def _job_status_payload_from_record(job_id: str, record: JsonDict | None) -> Jso
             cv = json.loads(cv_json)
         revision_mismatch = bool(record.get("revision_mismatch"))
 
+    error_code = record.get("error_code") if status == "failed" else None
     return {
         "job_id": job_id,
         "status": status,
@@ -243,8 +257,8 @@ def _job_status_payload_from_record(job_id: str, record: JsonDict | None) -> Jso
         "cv": cv,
         "run_id": record.get("run_id"),
         "revision_mismatch": revision_mismatch,
-        "error": record.get("error") if status == "failed" else None,
-        "error_code": record.get("error_code") if status == "failed" else None,
+        "error": failure_message(error_code or "AGENT_FAILED") if status == "failed" else None,
+        "error_code": error_code or "AGENT_FAILED" if status == "failed" else None,
     }
 
 
@@ -300,13 +314,19 @@ def _thread_summary(conn: sqlite3.Connection, thread_id: str) -> JsonDict | None
     summary = dict(row)
     message = conn.execute(
         """
-        SELECT content FROM agent_messages
-        WHERE thread_id = ? AND content != ''
-        ORDER BY created_at DESC LIMIT 1
+        SELECT m.content, m.status, j.error_code AS job_error_code
+        FROM agent_messages m
+        LEFT JOIN agent_jobs j ON j.id = m.job_id
+        WHERE m.thread_id = ? AND m.content != ''
+        ORDER BY m.created_at DESC LIMIT 1
         """,
         (thread_id,),
     ).fetchone()
-    summary["message_preview"] = _message_preview(message["content"]) if message else None
+    if message and message["status"] == "failed":
+        content = failure_message(message["job_error_code"] or "AGENT_FAILED")
+    else:
+        content = message["content"] if message else ""
+    summary["message_preview"] = _message_preview(content) or None
     return summary
 
 
@@ -361,7 +381,9 @@ def list_threads(limit: int = 50, status: str = "regular", user_id: str | None =
     rows = conn.execute(
         f"""
         SELECT t.*,
-            (SELECT m.content FROM agent_messages m WHERE m.thread_id = t.id AND m.content != '' ORDER BY m.created_at DESC LIMIT 1) AS message_preview
+            (SELECT m.content FROM agent_messages m WHERE m.thread_id = t.id AND m.content != '' ORDER BY m.created_at DESC LIMIT 1) AS message_preview,
+            (SELECT m.status FROM agent_messages m WHERE m.thread_id = t.id AND m.content != '' ORDER BY m.created_at DESC LIMIT 1) AS message_status,
+            (SELECT j.error_code FROM agent_messages m LEFT JOIN agent_jobs j ON j.id = m.job_id WHERE m.thread_id = t.id AND m.content != '' ORDER BY m.created_at DESC LIMIT 1) AS job_error_code
         FROM agent_threads t
         WHERE t.status = ?{user_clause}
         ORDER BY COALESCE(t.last_message_at, t.updated_at) DESC
@@ -373,7 +395,11 @@ def list_threads(limit: int = 50, status: str = "regular", user_id: str | None =
     result = []
     for row in rows:
         item = dict(row)
-        item["message_preview"] = _message_preview(item.get("message_preview") or "") or None
+        if item.get("message_status") == "failed":
+            content = failure_message(item.get("job_error_code") or "AGENT_FAILED")
+        else:
+            content = item.get("message_preview") or ""
+        item["message_preview"] = _message_preview(content) or None
         result.append(item)
     return result
 
@@ -427,7 +453,14 @@ def list_thread_messages(thread_id: str, limit: int = 200) -> list[JsonDict]:
     limit = _clamp_limit(limit, maximum=500)
     conn = _connect()
     rows = conn.execute(
-        "SELECT * FROM agent_messages WHERE thread_id = ? ORDER BY created_at ASC LIMIT ?",
+        """
+        SELECT m.*, j.error_code AS job_error_code
+        FROM agent_messages m
+        LEFT JOIN agent_jobs j ON j.id = m.job_id
+        WHERE m.thread_id = ?
+        ORDER BY m.created_at ASC
+        LIMIT ?
+        """,
         (thread_id, limit),
     ).fetchall()
     conn.close()
@@ -497,8 +530,9 @@ def update_message_status(
     return dict(row) if row else None
 
 
-def _mark_failed(job_id: str, error: str, error_code: str | None = None) -> None:
+def _mark_failed(job_id: str, error_code: str) -> None:
     job = get_job(job_id)
+    error = failure_message(error_code)
     if job is None or job.get("status") in {"completed", "failed"}:
         return
     _set_job_status(job_id, "failed", error=error, error_code=error_code)
@@ -567,12 +601,12 @@ def _run_job(
 
 def _on_job_done(job_id: str, future: Any) -> None:
     if future.cancelled():
-        _mark_failed(job_id, "cancelled")
+        _mark_failed(job_id, "JOB_INTERRUPTED")
         logger.warning("AGENT_JOB_CANCELLED | job_id=%s", job_id)
         return
     error = future.exception()
     if error is not None:
-        _mark_failed(job_id, str(error))
+        _mark_failed(job_id, "AGENT_FAILED")
         logger.warning("AGENT_JOB_FAILED | job_id=%s error=%s", job_id, str(error)[:300])
         return
     result = future.result()
@@ -678,7 +712,7 @@ def recover_interrupted_jobs() -> int:
     ).fetchall()
     conn.close()
     for row in rows:
-        _mark_failed(row["id"], JOB_INTERRUPTED_MESSAGE, JOB_INTERRUPTED)
+        _mark_failed(row["id"], JOB_INTERRUPTED)
     return len(rows)
 
 

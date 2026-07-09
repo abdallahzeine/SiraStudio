@@ -27,6 +27,7 @@ from .jobs import (
     create_thread,
     delete_thread,
     executor_available,
+    failure_message,
     get_thread,
     job_status_payload,
     jobs_db_available,
@@ -58,17 +59,25 @@ def _thread_response(record: JsonDict) -> JsonDict:
 
 
 def _message_response(record: JsonDict) -> JsonDict:
+    status = record.get("status") or "completed"
+    if status == "failed":
+        error = failure_message(record.get("job_error_code") or "AGENT_FAILED")
+        content = error
+    else:
+        error = record.get("error")
+        content = record.get("content") or ""
+
     return {
         "id": record.get("id"),
         "thread_id": record.get("thread_id"),
         "role": record.get("role"),
-        "content": record.get("content") or "",
-        "status": record.get("status") or "completed",
+        "content": content,
+        "status": status,
         "created_at": record.get("created_at"),
         "updated_at": record.get("updated_at"),
         "job_id": record.get("job_id"),
         "run_id": record.get("run_id"),
-        "error": record.get("error"),
+        "error": error,
     }
 
 
