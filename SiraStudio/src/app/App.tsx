@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, lazy, Suspense } from "react";
 import type { CVData } from "../shared/types";
 import { Toolbar } from "../features/cv-editor/components/Toolbar";
 import { SavesPanel } from "../features/saves/SavesPanel";
+import { useBackendDocumentAutosave } from "../features/saves/hooks/useBackendDocumentAutosave";
 import { AIAssistant } from "../features/assistant/AIAssistant";
 import { ConfirmModal } from "../shared/components/ConfirmModal";
 import { SplashScreen } from "../shared/components/SplashScreen";
@@ -67,6 +68,7 @@ export default function App() {
   const closeConfirm = () => setConfirmModal(null);
 
   useUndoRedoShortcuts(dispatch, history);
+  useBackendDocumentAutosave(cv, revision);
 
   const handlePanelWidthChange = useCallback((w: number) => {
     setPanelWidth(w);
