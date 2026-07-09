@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent import run_agent
+from .agent_logging import log_content
 
 JsonDict = dict[str, Any]
 
@@ -607,7 +608,18 @@ def _on_job_done(job_id: str, future: Any) -> None:
     error = future.exception()
     if error is not None:
         _mark_failed(job_id, "AGENT_FAILED")
-        logger.warning("AGENT_JOB_FAILED | job_id=%s error=%s", job_id, str(error)[:300])
+        logger.warning(
+            "AGENT_JOB_FAILED | job_id=%s | exception_type=%s",
+            job_id,
+            type(error).__name__,
+        )
+        log_content(
+            logger,
+            "job_failure",
+            job_id=job_id,
+            exception_type=type(error).__name__,
+            exception_detail=str(error),
+        )
         return
     result = future.result()
     _mark_completed(job_id, result)

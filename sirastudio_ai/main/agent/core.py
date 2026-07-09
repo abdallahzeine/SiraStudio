@@ -17,6 +17,7 @@ from langgraph.runtime import Runtime
 from langgraph.store.memory import InMemoryStore
 from typing_extensions import TypedDict
 
+from ..agent_logging import log_content
 from .llm import get_llm
 from .prompts import (
     FORCE_READ_PROMPT,
@@ -428,9 +429,15 @@ def _tool_feedback_node(state: CVGraphState):
         metadata["tool_error_count"] = metadata.get("tool_error_count", 0) + 1
         metadata["last_tool_errors"] = errors
         logger.warning(
-            "AGENT_TOOL_ERROR | thread_id=%s | errors=%s",
+            "AGENT_TOOL_ERROR | thread_id=%s | error_count=%d",
             metadata.get("thread_id", ""),
-            " | ".join(errors)[:500],
+            len(errors),
+        )
+        log_content(
+            logger,
+            "tool_error",
+            thread_id=metadata.get("thread_id", ""),
+            errors=errors,
         )
         if metadata["tool_error_count"] >= _MAX_TOOL_ERROR_RETRIES:
             metadata["workflow_failed_reason"] = "tool_errors"
@@ -569,7 +576,15 @@ def run_agent(
     if checkpoint_id:
         config["configurable"]["checkpoint_id"] = checkpoint_id
 
-    logger.info("[PROMPT] thread_id=%s run_id=%s %s", thread_id, run_id, message[:200])
+    logger.info("AGENT_RUN_START | thread_id=%s | run_id=%s", thread_id, run_id)
+    log_content(
+        logger,
+        "agent_input",
+        thread_id=thread_id,
+        run_id=run_id,
+        message=message,
+        cv=cv,
+    )
 
     context_user = user_id or thread_id
     result: Any = inputs
@@ -609,7 +624,15 @@ def run_agent(
     reply = _extract_reply(result) or "Done."
     final_cv = result.get("cv", cv)
 
-    logger.info("[DONE] thread_id=%s run_id=%s %s", thread_id, run_id, reply[:140])
+    logger.info("AGENT_RUN_DONE | thread_id=%s | run_id=%s", thread_id, run_id)
+    log_content(
+        logger,
+        "agent_output",
+        thread_id=thread_id,
+        run_id=run_id,
+        reply=reply,
+        cv=final_cv,
+    )
     return {
         "cv": final_cv,
         "reply": reply,

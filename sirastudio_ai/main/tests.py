@@ -407,6 +407,54 @@ class AgentBackendSmokeTests(TestCase):
     def _sse_body(self, response: Any) -> str:
         return asyncio.run(self._collect_sse(response.streaming_content))
 
+    def test_opted_in_agent_logs_redact_content_and_stay_bounded(self) -> None:
+        password = "diagnostic-password"
+        inert_bearer = "Bearer inert-redaction-fixture-only"
+        detail = f"password is {password}; {inert_bearer}; {'x' * 500}"
+        max_chars = 160
+
+        def fake_run_agent(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError(detail)
+
+        with self.settings(
+            CV_MAKER_AGENT_LOG_CONTENT=True,
+            CV_MAKER_AGENT_LOG_CONTENT_MAX_CHARS=max_chars,
+        ):
+            with self.assertLogs("agent_logger", level="INFO") as logs:
+                with patch("main.jobs.run_agent", fake_run_agent):
+                    thread: Any = self.client.post(
+                        "/api/agent/threads",
+                        data=json.dumps({"title": "Logging test"}),
+                        content_type="application/json",
+                    )
+                    thread_id = thread.json()["thread_id"]
+                    edit: Any = self.client.post(
+                        "/api/agent/edit",
+                        data=json.dumps(
+                            {
+                                "cv": {"header": {}, "sections": []},
+                                "message": "Trigger diagnostic logging",
+                                "thread_id": thread_id,
+                            }
+                        ),
+                        content_type="application/json",
+                    )
+                    status = self._wait_for_job(edit.json()["job_id"])
+
+        output = "\n".join(logs.output)
+        content_payloads = [
+            line.rsplit(" | data=", 1)[1]
+            for line in logs.output
+            if "AGENT_CONTENT" in line
+        ]
+        self.assertEqual(status["status"], "failed")
+        self.assertIn("password is [REDACTED]", output)
+        self.assertNotIn(password, output)
+        self.assertNotIn(inert_bearer, output)
+        self.assertTrue(content_payloads)
+        self.assertTrue(any(payload.endswith("...[truncated]") for payload in content_payloads))
+        self.assertTrue(all(len(payload) <= max_chars for payload in content_payloads))
+
     def _wait_for_job(self, job_id: str) -> dict[str, Any]:
         for _ in range(40):
             response: Any = self.client.get(f"/api/agent/jobs/{job_id}")
