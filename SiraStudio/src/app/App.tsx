@@ -1,7 +1,6 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from "react";
-import type { CVData, CVSection } from "../shared/types";
+import type { CVData } from "../shared/types";
 import { Toolbar } from "../features/cv-editor/components/Toolbar";
-import { SectionModal } from "../features/cv-editor/components/SectionModal";
 import { SavesPanel } from "../features/saves/SavesPanel";
 import { useBackendDocumentAutosave } from "../features/saves/hooks/useBackendDocumentAutosave";
 import { AIAssistant } from "../features/assistant/AIAssistant";
@@ -30,7 +29,6 @@ import {
   type PanelState,
   type PanelType,
 } from "./panels";
-import { usePendingSectionScroll } from "./hooks/usePendingSectionScroll";
 import { useUndoRedoShortcuts } from "./hooks/useUndoRedoShortcuts";
 import { useCVSelector, useDispatch, useHistory } from "./store";
 
@@ -51,7 +49,6 @@ export default function App() {
   const dispatch = useDispatch();
   const history = useHistory();
   const [showSplash, setShowSplash] = useState(true);
-  const [sectionModalOpen, setSectionModalOpen] = useState(false);
   const [panel, setPanel] = useState<PanelState | null>(null);
   const [panelWidth, setPanelWidth] = useState(loadSidePanelWidth);
   const [confirmModal, setConfirmModal] = useState<{
@@ -72,18 +69,6 @@ export default function App() {
 
   useUndoRedoShortcuts(dispatch, history);
   useBackendDocumentAutosave(cv, revision);
-
-  const [pendingScrollId, setPendingScrollId] = useState<string | null>(null);
-
-  usePendingSectionScroll(pendingScrollId, setPendingScrollId);
-
-  const addSection = useCallback(
-    (section: CVSection) => {
-      dispatch({ op: "insert", path: "sections[-1]", value: section });
-      setPendingScrollId(section.id);
-    },
-    [dispatch],
-  );
 
   const handlePanelWidthChange = useCallback((w: number) => {
     setPanelWidth(w);
@@ -175,17 +160,10 @@ export default function App() {
         <Toolbar
           onReset={handleReset}
           onPrint={handlePrint}
-          onAddSection={() => setSectionModalOpen(true)}
           onOpenSaves={() => setPanel({ type: "saves" })}
           onOpenAI={() => setPanel({ type: "agent" })}
           panelOffsetX={toolbarOffsetX}
         />
-        {sectionModalOpen && (
-          <SectionModal
-            onClose={() => setSectionModalOpen(false)}
-            onAddSection={addSection}
-          />
-        )}
         {!showSplash && (
           <ErrorBoundary>
             <Suspense fallback={null}>

@@ -1,5 +1,6 @@
 import type { CVData, CVItem, CVSection } from '../../../shared/types';
 import { defaultLayoutFor, uid } from '../../../shared/utils/helpers';
+import { builtInSectionSchemas, migrateCVData } from '../../../shared/utils/cvContent';
 
 export interface CVSnapshot {
   id: string;
@@ -43,12 +44,12 @@ function cloneValue<T>(value: T): T {
 }
 
 export function isValidCVData(value: unknown): value is CVData {
-  if (!isRecord(value)) return false;
-  if (!isRecord(value.header)) return false;
-  if (!Array.isArray(value.sections)) return false;
-  if (!isRecord(value.template)) return false;
+  const data = migrateCVData(value);
+  if (!isRecord(data.header)) return false;
+  if (!Array.isArray(data.sections)) return false;
+  if (!isRecord(data.template)) return false;
 
-  const header = value.header;
+  const header = data.header;
   if (
     typeof header.name !== 'string' ||
     typeof header.location !== 'string' ||
@@ -59,7 +60,7 @@ export function isValidCVData(value: unknown): value is CVData {
     return false;
   }
 
-  const sections = value.sections;
+  const sections = data.sections;
   if (
     sections.some((section) => {
       if (!isRecord(section)) return true;
@@ -67,7 +68,9 @@ export function isValidCVData(value: unknown): value is CVData {
         typeof section.id !== 'string' ||
         typeof section.type !== 'string' ||
         typeof section.title !== 'string' ||
-        !Array.isArray(section.items) ||
+        !isRecord(section.content) ||
+        !Array.isArray(section.content.schema) ||
+        !Array.isArray(section.content.items) ||
         !isRecord(section.layout)
       );
     })
@@ -75,7 +78,7 @@ export function isValidCVData(value: unknown): value is CVData {
     return false;
   }
 
-  const template = value.template;
+  const template = data.template;
   if (typeof template.id !== 'string') return false;
   if (template.columns !== 1 && template.columns !== 2) return false;
 
@@ -117,7 +120,7 @@ export function loadSnapshots(): CVSnapshot[] {
       name: snapshot.name,
       savedAt: snapshot.savedAt,
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
-      data: cloneValue(snapshot.data),
+      data: migrateCVData(cloneValue(snapshot.data)),
     }));
   } catch {
     return [];
@@ -149,8 +152,11 @@ function createBlankSection(type: CVSection['type'], title: string, item: CVItem
     id: uid(),
     type,
     title,
-    items: [item],
     layout: defaultLayoutFor(type),
+    content: {
+      schema: builtInSectionSchemas[type],
+      items: [item],
+    },
   };
 }
 
@@ -167,25 +173,25 @@ export function createBlankCVData(): CVData {
     sections: [
       createBlankSection('summary', 'PROFESSIONAL SUMMARY', {
         id: uid(),
-        body: '',
+        fields: { body: '' },
       }),
       createBlankSection('work-experience', 'WORK EXPERIENCE', {
         id: uid(),
-        title: '',
-        subtitle: '',
-        location: '',
-        dateEnd: 'present',
-        bullets: [''],
+        fields: {
+          title: '',
+          subtitle: '',
+          location: '',
+          date: '',
+          bullets: [''],
+        },
       }),
       createBlankSection('education', 'EDUCATION', {
         id: uid(),
-        title: '',
-        subtitle: '',
-        date: '',
+        fields: { title: '', subtitle: '', date: '' },
       }),
       createBlankSection('skills', 'SKILLS', {
         id: uid(),
-        skillGroups: [],
+        fields: { label: 'Category', value: '' },
       }),
     ],
   };

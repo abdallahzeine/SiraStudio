@@ -8,6 +8,7 @@ import { BulletListPrint } from '../../print/layouts/BulletListPrint';
 import { ItemFramePrint } from '../../print/layouts/ItemFramePrint';
 import { PrintRichText } from '../../print/PrintRichText';
 import { uid } from '../../../shared/utils/helpers';
+import { builtInSectionSchemas } from '../../../shared/utils/cvContent';
 
 function renderCustomFields(
   path: string,
@@ -21,7 +22,7 @@ function renderCustomFields(
   return (
     <div className="space-y-0.5 text-sm text-gray-700">
       {fields.map((field) => {
-        const values = item.values ?? {};
+        const values = item.fields;
         const val = values[field.key];
 
         if (field.kind === 'bullets') {
@@ -31,7 +32,7 @@ function renderCustomFields(
               <span className="font-medium text-xs text-gray-500 block mb-0.5">{field.label}</span>
               <BulletList
                 bullets={bullets}
-                bulletsPath={`${path}.values.${field.key}`}
+                bulletsPath={`${path}.fields.${field.key}`}
                 iconStyle={layout.iconStyle}
               />
             </div>
@@ -47,7 +48,7 @@ function renderCustomFields(
               <CVTextEditor
                 multiline
                 value={strVal}
-                path={`${path}.values.${field.key}`}
+                path={`${path}.fields.${field.key}`}
                 placeholder={field.placeholder ?? `Enter ${field.label}...`}
                 className="text-gray-700 text-sm leading-relaxed"
               />
@@ -60,7 +61,7 @@ function renderCustomFields(
             <span className="font-semibold shrink-0">{field.label}:</span>
             <CVTextEditor
               value={strVal}
-              path={`${path}.values.${field.key}`}
+              path={`${path}.fields.${field.key}`}
               placeholder={field.placeholder ?? `Enter ${field.label}...`}
             />
           </div>
@@ -79,7 +80,7 @@ function renderCustomFieldsPrint(
     return <p className="text-xs text-gray-400 italic">No fields defined.</p>;
   }
 
-  const values = item.values ?? {};
+  const values = item.fields;
 
   return (
     <div className="space-y-0.5 text-sm text-gray-700">
@@ -108,7 +109,7 @@ function renderCustomFieldsPrint(
           );
         }
 
-        if (field.kind === 'pairs') {
+        if (field.kind === 'tags') {
           const pairs = Array.isArray(value) ? value : [];
           return (
             <div key={field.key} className="flex items-baseline gap-2 flex-wrap">
@@ -140,7 +141,7 @@ const renderCustomEditor: NonNullable<SectionDef['renderItemEditor']> = ({
   schema,
 }) => (
   <ItemFrame itemId={item.id} density={layout.density} index={index} total={total} onMove={onMove} onDelete={onDelete} path={itemPath}>
-    {renderCustomFields(itemPath, item, schema?.fields ?? [], layout)}
+    {renderCustomFields(itemPath, item, schema, layout)}
   </ItemFrame>
 );
 
@@ -151,6 +152,7 @@ export const customDef: SectionDef = {
   defaultTitle: 'CUSTOM SECTION',
   defaultLayout: classicLayouts.custom,
   recommendedLayout: professionalLayouts.custom,
+  schema: builtInSectionSchemas.custom,
   category: 'custom',
   allowedLayoutOptions: {
     dateSlot: ['hidden', 'right-inline', 'below-title', 'left-margin'],
@@ -162,12 +164,12 @@ export const customDef: SectionDef = {
   singleItem: false,
   addItemLabel: 'Add item',
   availablePresetIds: ['classic'],
-  newItem: () => ({ id: uid(), values: {} }),
+  newItem: () => ({ id: uid(), fields: {} }),
   renderItemEditor: renderCustomEditor,
   renderItem: renderCustomEditor,
   renderItemPrint: ({ item, layout, schema }) => (
     <ItemFramePrint density={layout.density}>
-      {renderCustomFieldsPrint(item, schema?.fields ?? [], layout.iconStyle)}
+      {renderCustomFieldsPrint(item, schema, layout.iconStyle)}
     </ItemFramePrint>
   ),
 };

@@ -55,25 +55,11 @@ export interface SkillGroup {
   value: string;
 }
 
+export type SectionFieldValue = string | string[];
+
 export interface CVItem {
   id: string;
-  // For education, certifications, awards, volunteering
-  title?: string;
-  subtitle?: string;
-  date?: string;
-  role?: string;
-  // For work-experience and education: structured location and date range
-  location?: string;
-  dateStart?: StructuredDate;
-  dateEnd?: StructuredDate | 'present';
-  // For projects
-  bullets?: string[];
-  // For skills
-  skillGroups?: SkillGroup[];
-  // Generic extra text (summary body, etc.)
-  body?: string;
-  // For custom sections: open key→value bag
-  values?: Record<string, string | string[]>;
+  fields: Record<string, SectionFieldValue>;
 }
 
 // ─── Layout types ────────────────────────────────────────────────────────────
@@ -94,17 +80,25 @@ export interface SectionLayout {
 
 // ─── Custom section field schema ─────────────────────────────────────────────
 
-export type CustomFieldKind = 'text' | 'multiline' | 'date' | 'bullets' | 'pairs';
+export type CustomFieldKind = 'text' | 'multiline' | 'date' | 'bullets' | 'tags';
 
 export interface CustomFieldDef {
   key: string;
   label: string;
   kind: CustomFieldKind;
   placeholder?: string;
+  required?: boolean;
 }
 
 export interface CustomSectionSchema {
   fields: CustomFieldDef[];
+}
+
+export type SectionFieldDef = CustomFieldDef;
+
+export interface SectionContent {
+  schema: SectionFieldDef[];
+  items: CVItem[];
 }
 
 // ─── Overall template ─────────────────────────────────────────────────────────
@@ -124,9 +118,8 @@ export interface CVSection {
   id: string;
   type: SectionType;
   title: string;
-  items: CVItem[];
   layout: SectionLayout;
-  schema?: CustomSectionSchema; // only when type === 'custom'
+  content: SectionContent;
 }
 
 export interface CVData {

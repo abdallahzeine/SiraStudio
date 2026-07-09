@@ -38,7 +38,7 @@ _STORE_DB_PATH = Path.home() / ".cv-maker" / "agent-store.sqlite"
 _STORE_MODE_ENV = "CV_MAKER_STORE"
 _MAX_TOOL_ERROR_RETRIES = 2
 _MAX_WORKFLOW_GUARD_PROMPTS = 2
-_EDIT_TOOL_NAMES = {getattr(tool, "name", "") for tool in ALL_TOOLS} - {READ_TOOL_NAME}
+_EDIT_TOOL_NAMES = {"edit_cv_path"}
 
 
 @dataclass
