@@ -1,8 +1,10 @@
+import asyncio
 import json
 import os
 import time
 from typing import Any
 
+from asgiref.sync import sync_to_async
 from django.http import StreamingHttpResponse
 from ninja import Router
 from ninja.errors import HttpError
@@ -25,8 +27,8 @@ from .jobs import (
     create_thread,
     delete_thread,
     executor_available,
-    get_job,
     get_thread,
+    job_status_payload,
     jobs_db_available,
     list_job_events,
     list_thread_messages,
@@ -79,38 +81,17 @@ def _require_thread(thread_id: str) -> JsonDict:
     return record
 
 
-def _job_status_payload(job_id: str) -> JsonDict:
-    record = get_job(job_id)
-    if record is None:
-        return {"job_id": job_id, "status": "failed", "error": "Job not found"}
-
-    status = record.get("status")
-    cv = None
-    revision_mismatch = None
-    if status == "completed":
-        cv_json = record.get("cv_json")
-        if cv_json:
-            cv = json.loads(cv_json)
-        revision_mismatch = bool(record.get("revision_mismatch"))
-
-    return {
-        "job_id": job_id,
-        "status": status,
-        "created_at": record.get("created_at"),
-        "updated_at": record.get("updated_at"),
-        "thread_id": record.get("thread_id"),
-        "message_preview": record.get("message_preview"),
-        "reply": record.get("reply"),
-        "cv": cv,
-        "run_id": record.get("run_id"),
-        "revision_mismatch": revision_mismatch,
-        "error": record.get("error") if status == "failed" else None,
-        "error_code": record.get("error_code") if status == "failed" else None,
-    }
+def _sse_event(event: str, data: JsonDict, cursor: int | None = None) -> str:
+    event_id = f"id: {cursor}\n" if cursor is not None else ""
+    return f"{event_id}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _sse_event(event: str, data: JsonDict) -> str:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+def _sse_cursor(request) -> int:
+    value = request.headers.get("Last-Event-ID") or request.GET.get("cursor")
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 @router.post("/edit", response=JobCreateResponse, summary="Edit CV via AI agent")
@@ -176,36 +157,37 @@ def remove_thread(request, thread_id: str) -> JsonDict:
 
 @router.get("/jobs/{job_id}", response=JobStatusResponse, summary="Get agent job status")
 def job_status(request, job_id: str) -> JsonDict:
-    return _job_status_payload(job_id)
+    return job_status_payload(job_id)
 
 
 @router.get("/jobs/{job_id}/events", summary="Stream agent job status events")
-def job_events(request, job_id: str):
-    def stream():
+async def job_events(request, job_id: str):
+    cursor = _sse_cursor(request)
+
+    async def stream():
         deadline = time.monotonic() + _SSE_TIMEOUT_SECONDS
-        last_marker: tuple[Any, Any] | None = None
-        last_event_id: str | None = None
+        last_cursor = cursor
 
         while time.monotonic() < deadline:
-            payload: JsonDict = _job_status_payload(job_id)
-            marker = (payload.get("status"), payload.get("updated_at"))
+            payload: JsonDict = await sync_to_async(
+                job_status_payload, thread_sensitive=False
+            )(job_id)
             status = payload.get("status")
 
-            for job_event in list_job_events(job_id, after_id=last_event_id):
-                last_event_id = job_event["id"]
-                yield _sse_event(job_event["type"], job_event)
-
-            if marker != last_marker:
-                last_marker = marker
-                event = status if status in {"completed", "failed"} else "job"
-                yield _sse_event(event, payload)
+            events = await sync_to_async(list_job_events, thread_sensitive=False)(
+                job_id, last_cursor
+            )
+            for job_event in events:
+                last_cursor = job_event["id"]
+                data = job_event if job_event["type"] == "tool" else job_event["data"]
+                yield _sse_event(job_event["type"], data, last_cursor)
 
             if status in {"completed", "failed"}:
+                if not events and last_cursor == 0:
+                    yield _sse_event(status, payload)
                 return
 
-            time.sleep(_SSE_POLL_SECONDS)
-
-        yield _sse_event("failed", {"job_id": job_id, "status": "failed", "error": "Agent job timed out."})
+            await asyncio.sleep(_SSE_POLL_SECONDS)
 
     response = StreamingHttpResponse(stream(), content_type="text/event-stream")
     response["Cache-Control"] = "no-cache"

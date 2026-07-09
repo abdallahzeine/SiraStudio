@@ -16,7 +16,7 @@ if (-not (Test-Path $backendPython)) {
 }
 
 $frontendCommand = "Set-Location '$frontendPath'; npm run dev"
-$backendCommand = "Set-Location '$backendPath'; & '$backendPython' manage.py runserver 8000"
+$backendCommand = "Set-Location '$backendPath'; & '$backendPython' -m uvicorn sirastudio_ai.asgi:application --reload --port 8000"
 
 $frontendProcess = Start-Process powershell -ArgumentList '-NoExit', '-Command', $frontendCommand -PassThru
 $backendProcess = Start-Process powershell -ArgumentList '-NoExit', '-Command', $backendCommand -PassThru
