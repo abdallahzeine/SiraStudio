@@ -17,6 +17,31 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+# Content diagnostics are process-wide and intended only for short-lived support
+# sessions: enable the flag, restart the service, then disable it and restart.
+CV_MAKER_AGENT_LOG_CONTENT = os.getenv("CV_MAKER_AGENT_LOG_CONTENT", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+CV_MAKER_AGENT_LOG_CONTENT_MAX_CHARS = _positive_env_int(
+    "CV_MAKER_AGENT_LOG_CONTENT_MAX_CHARS", 2000
+)
+CV_MAKER_AGENT_LOG_MAX_BYTES = _positive_env_int(
+    "CV_MAKER_AGENT_LOG_MAX_BYTES", 5 * 1024 * 1024
+)
+CV_MAKER_AGENT_LOG_BACKUP_COUNT = _positive_env_int("CV_MAKER_AGENT_LOG_BACKUP_COUNT", 3)
+
+
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
@@ -136,10 +161,13 @@ LOGGING = {
     },
     "handlers": {
         "agent_file": {
-            "class": "logging.FileHandler",
+            "class": "logging.handlers.RotatingFileHandler",
             "filename": BASE_DIR / "agent.log",
             "formatter": "agent",
             "level": "INFO",
+            "maxBytes": CV_MAKER_AGENT_LOG_MAX_BYTES,
+            "backupCount": CV_MAKER_AGENT_LOG_BACKUP_COUNT,
+            "encoding": "utf-8",
         },
         "console": {
             "class": "logging.StreamHandler",
