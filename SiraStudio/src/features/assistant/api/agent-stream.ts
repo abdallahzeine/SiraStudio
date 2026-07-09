@@ -27,17 +27,9 @@ function getLastUserMessageText(messages: ChatModelRunOptions['messages']): stri
 function toolLabel(name: string): string {
   const labels: Record<string, string> = {
     read_cv: 'Reading CV',
-    update_header: 'Editing header',
-    manage_sections: 'Editing sections',
-    reorder_sections: 'Reordering sections',
+    edit_cv_path: 'Editing CV',
     resolve_sections: 'Finding sections',
     resolve_items: 'Finding items',
-    replace_cv_content: 'Replacing CV',
-    add_item: 'Adding item',
-    remove_item: 'Removing item',
-    update_item: 'Updating item',
-    set_item_bullets: 'Editing bullets',
-    set_item_skill_groups: 'Editing skills',
   };
   return labels[name] ?? name.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }

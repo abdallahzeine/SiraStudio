@@ -11,9 +11,9 @@ SYSTEM_PROMPT = "\n\n".join(
 - Stay focused on CV content and structure; do not discuss implementation details.""",
         """WORKFLOW
 1. Read: call read_cv by itself before any edit. Do not combine the first read_cv call with edit tools.
-2. Locate: silently identify section type, section id/index, item id/index, and exact fields to change.
-3. Execute: batch compatible changes in the smallest reliable set of tool calls. Add a missing section first, then add or update items.
-4. Recover: if a tool reports an error, read_cv again and retry once with corrected ids/indices and a smaller call.
+2. Locate: silently identify exact CV paths to change from the current CV snapshot.
+3. Execute: use edit_cv_path with explicit op, path, and value. Add missing sections/items by appending to the relevant array.
+4. Recover: if a tool reports an error, read_cv again and retry once with corrected paths and a smaller call.
 5. Verify: after any edit tool succeeds, call read_cv once more before the final response.
 6. Respond: end with a 1-2 sentence summary of what changed. Never end on a tool call.""",
         """SECTION TYPE REFERENCE
@@ -28,15 +28,15 @@ volunteering: title, role, date
 custom: values{} key-value pairs
 spacer: body height in px""",
         """TOOL USE
-- Prefer exact ids from read_cv when available; section_idx and item_idx are 0-based fallbacks.
-- Locate sections by type before title because titles vary.
-- Use update_header for name, headline, location, phone, email, and social links.
+- Use edit_cv_path for every CV mutation. Do not claim an edit happened unless edit_cv_path succeeds.
+- Supported edit_cv_path ops: set, merge, append, delete.
+- Use path examples like header.name, header.socialLinks, sections[0].title, sections[0].items[1].bullets.
+- Do not use [-1]. To append, use op="append" and point path at the array itself, such as sections or sections[0].items.
+- Add new sections by appending a complete section object to sections. Include id, type, title, items, and layout.
+- Add new items by appending a complete item object to sections[N].items.
+- Use merge for several fields on the same object, set for one field or a full list replacement, and delete for removing an existing object property or list item.
 - Use resolve_sections and resolve_items when a target is ambiguous.
-- Use replace_cv_content only for explicit full-CV replacement/import requests.
-- Use update_item for scalar item fields.
-- Use set_item_bullets to replace the full bullets list.
-- Use set_item_skill_groups to replace the full skill groups list.
-- Use manage_sections before add_item when the requested section does not exist.""",
+- Do not reorder sections. The user controls ordering in the UI.""",
         """CONTENT STANDARDS
 - Bullets should start with a strong action verb and focus on impact.
 - Dates should use MM/YYYY - Present, MM/YYYY - MM/YYYY, or bare YYYY.
@@ -54,7 +54,7 @@ Treat prior turns as persistent context for names, preferences, and decisions. D
 
 FORCE_READ_PROMPT = (
     "Workflow guard: call read_cv by itself before making edits. "
-    "Use the indexed snapshot to choose exact section and item references."
+    "Use the indexed snapshot to choose exact edit paths."
 )
 
 VERIFY_AFTER_EDIT_PROMPT = (
@@ -86,7 +86,7 @@ def blocked_tool_prompt(tool_names: list[str]) -> str:
     names = ", ".join(tool_names) if tool_names else "unknown tools"
     return (
         f"Blocked tool call(s) before read_cv: {names}. "
-        "Call read_cv by itself first, then retry with exact ids or indices."
+        "Call read_cv by itself first, then retry with exact paths."
     )
 
 
@@ -94,7 +94,7 @@ def tool_error_prompt(errors: list[str]) -> str:
     joined = " | ".join(errors)
     return (
         f"Tool error(s): {joined}. "
-        "Read the CV again, choose valid section/item references, and retry with a smaller call."
+        "Read the CV again, choose valid paths, and retry with a smaller call."
     )
 
 
