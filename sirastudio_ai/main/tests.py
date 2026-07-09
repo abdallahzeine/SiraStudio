@@ -1,6 +1,7 @@
 ﻿import json
 import tempfile
 import time
+from threading import Event
 from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
@@ -178,6 +179,110 @@ class AgentBackendSmokeTests(TestCase):
             body = b"".join(events.streaming_content).decode("utf-8")
             self.assertIn("event: tool", body)
             self.assertIn("event: completed", body)
+
+    def test_deleted_threads_are_terminal_and_archived_threads_remain_resumable(self) -> None:
+        job_started = Event()
+        finish_job = Event()
+
+        def fake_run_agent(
+            cv: dict[str, Any],
+            message: str,
+            thread_id: str,
+            run_id: str | None = None,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            if message == "Wait for deletion":
+                job_started.set()
+                self.assertTrue(finish_job.wait(timeout=2))
+            return {"cv": cv, "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
+
+        with patch("main.jobs.run_agent", fake_run_agent):
+            deleted_thread = self.client.post(
+                "/api/agent/threads",
+                data=json.dumps({"title": "Delete me"}),
+                content_type="application/json",
+            ).json()["thread_id"]
+            job_response = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": {"header": {}, "sections": []},
+                        "message": "Wait for deletion",
+                        "thread_id": deleted_thread,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(job_response.status_code, 200)
+            job_id = job_response.json()["job_id"]
+            self.assertTrue(job_started.wait(timeout=2))
+
+            messages_before_delete = self._stored_thread_messages(deleted_thread)
+            job_before_delete = jobs.get_job(job_id)
+            deleted = self.client.delete(f"/api/agent/threads/{deleted_thread}")
+            self.assertEqual(deleted.status_code, 200)
+            self.assertEqual(self._stored_thread_messages(deleted_thread), messages_before_delete)
+            self.assertEqual(jobs.get_job(job_id), job_before_delete)
+
+            missing = self.client.get("/api/agent/threads/missing-thread")
+            direct_read = self.client.get(f"/api/agent/threads/{deleted_thread}")
+            self.assertEqual(direct_read.status_code, missing.status_code)
+            self.assertEqual(direct_read.json(), missing.json())
+            listed = self.client.get("/api/agent/threads")
+            self.assertFalse(any(item["thread_id"] == deleted_thread for item in listed.json()["threads"]))
+
+            rejected = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": {"header": {}, "sections": []},
+                        "message": "Do not create a job",
+                        "thread_id": deleted_thread,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(rejected.status_code, 404)
+            self.assertEqual(len(jobs.list_recent_jobs()), 1)
+
+            finish_job.set()
+            self.assertEqual(self._wait_for_job(job_id)["status"], "completed")
+            self.assertEqual(self._stored_thread_messages(deleted_thread), messages_before_delete)
+            self.assertEqual(len(messages_before_delete), 1)
+
+            archived_thread = self.client.post(
+                "/api/agent/threads",
+                data=json.dumps({"title": "Keep me"}),
+                content_type="application/json",
+            ).json()["thread_id"]
+            archived = self.client.post(f"/api/agent/threads/{archived_thread}/archive")
+            self.assertEqual(archived.status_code, 200)
+            self.assertEqual(archived.json()["status"], "archived")
+            self.assertEqual(self.client.get(f"/api/agent/threads/{archived_thread}").status_code, 200)
+
+            resumed = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": {"header": {}, "sections": []},
+                        "message": "Resume this thread",
+                        "thread_id": archived_thread,
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(resumed.status_code, 200)
+            self.assertEqual(self._wait_for_job(resumed.json()["job_id"])["status"], "completed")
+            self.assertEqual(self.client.get(f"/api/agent/threads/{archived_thread}").json()["status"], "archived")
+
+    def _stored_thread_messages(self, thread_id: str) -> list[dict[str, Any]]:
+        conn = jobs._connect()
+        rows = conn.execute(
+            "SELECT * FROM agent_messages WHERE thread_id = ? ORDER BY created_at ASC",
+            (thread_id,),
+        ).fetchall()
+        conn.close()
+        return [dict(row) for row in rows]
 
     def _wait_for_job(self, job_id: str) -> dict[str, Any]:
         for _ in range(40):

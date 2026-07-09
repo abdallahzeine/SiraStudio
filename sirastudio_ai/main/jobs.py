@@ -26,6 +26,10 @@ _db_ready = False
 _JOB_EVENTS: dict[str, list[JsonDict]] = {}
 
 
+class ThreadNotFoundError(Exception):
+    """Raised when a terminal thread is used as a job target."""
+
+
 def get_db_path() -> Path:
     return _db_path
 
@@ -238,6 +242,9 @@ def ensure_thread(thread_id: str, user_id: str | None = None, title: str | None 
                 (thread_id, user_id, title, now, now),
             )
         else:
+            if row["status"] == "deleted":
+                conn.close()
+                raise ThreadNotFoundError("Thread not found")
             fields = {"updated_at": now}
             if user_id and not row["user_id"]:
                 fields["user_id"] = user_id
@@ -260,6 +267,8 @@ def create_thread(user_id: str | None = None, title: str | None = None) -> JsonD
 
 
 def list_threads(limit: int = 50, status: str = "regular", user_id: str | None = None) -> list[JsonDict]:
+    if status == "deleted":
+        return []
     _init_db()
     limit = _clamp_limit(limit)
     params: list[object] = [status]
@@ -294,6 +303,8 @@ def get_thread(thread_id: str) -> JsonDict | None:
     conn = _connect()
     summary = _thread_summary(conn, thread_id)
     conn.close()
+    if summary and summary["status"] == "deleted":
+        return None
     return summary
 
 
@@ -301,12 +312,12 @@ def rename_thread(thread_id: str, title: str) -> JsonDict | None:
     _init_db()
     with _LOCK:
         conn = _connect()
-        _ = conn.execute(
-            "UPDATE agent_threads SET title = ?, updated_at = ? WHERE id = ?",
+        cursor = conn.execute(
+            "UPDATE agent_threads SET title = ?, updated_at = ? WHERE id = ? AND status != 'deleted'",
             (title.strip(), _utc_now(), thread_id),
         )
         conn.commit()
-        summary = _thread_summary(conn, thread_id)
+        summary = _thread_summary(conn, thread_id) if cursor.rowcount else None
         conn.close()
     return summary
 
@@ -323,12 +334,12 @@ def _set_thread_status(thread_id: str, status: str) -> JsonDict | None:
     _init_db()
     with _LOCK:
         conn = _connect()
-        _ = conn.execute(
-            "UPDATE agent_threads SET status = ?, updated_at = ? WHERE id = ?",
+        cursor = conn.execute(
+            "UPDATE agent_threads SET status = ?, updated_at = ? WHERE id = ? AND status != 'deleted'",
             (status, _utc_now(), thread_id),
         )
         conn.commit()
-        summary = _thread_summary(conn, thread_id)
+        summary = _thread_summary(conn, thread_id) if cursor.rowcount else None
         conn.close()
     return summary
 
@@ -337,6 +348,10 @@ def list_thread_messages(thread_id: str, limit: int = 200) -> list[JsonDict]:
     _init_db()
     limit = _clamp_limit(limit, maximum=500)
     conn = _connect()
+    thread = conn.execute("SELECT status FROM agent_threads WHERE id = ?", (thread_id,)).fetchone()
+    if thread is None or thread["status"] == "deleted":
+        conn.close()
+        return []
     rows = conn.execute(
         "SELECT * FROM agent_messages WHERE thread_id = ? ORDER BY created_at ASC LIMIT ?",
         (thread_id, limit),
@@ -354,12 +369,16 @@ def append_thread_message(
     run_id: str | None = None,
     status: str = "completed",
     error: str | None = None,
-) -> JsonDict:
+) -> JsonDict | None:
     _init_db()
     now = _utc_now()
     message_id = uuid.uuid4().hex
     with _LOCK:
         conn = _connect()
+        thread = conn.execute("SELECT status FROM agent_threads WHERE id = ?", (thread_id,)).fetchone()
+        if thread is None or thread["status"] == "deleted":
+            conn.close()
+            return None
         parent_id = _last_message_id(conn, thread_id)
         _ = conn.execute(
             """
@@ -505,8 +524,11 @@ def create_job(
     _ = ensure_thread(thread_id, user_id=user_id)
     with _LOCK:
         conn = _connect()
-        thread = conn.execute("SELECT title FROM agent_threads WHERE id = ?", (thread_id,)).fetchone()
-        if thread and (not thread["title"] or thread["title"] == "New chat"):
+        thread = conn.execute("SELECT title, status FROM agent_threads WHERE id = ?", (thread_id,)).fetchone()
+        if thread is None or thread["status"] == "deleted":
+            conn.close()
+            raise ThreadNotFoundError("Thread not found")
+        if not thread["title"] or thread["title"] == "New chat":
             _ = conn.execute(
                 "UPDATE agent_threads SET title = ?, updated_at = ? WHERE id = ?",
                 (_thread_title(message), now, thread_id),

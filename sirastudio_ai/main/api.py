@@ -20,6 +20,7 @@ from .agent import (
 
 from .agent.llm import OPENROUTER_API_KEY
 from .jobs import (
+    ThreadNotFoundError,
     archive_thread,
     create_job,
     create_thread,
@@ -115,20 +116,23 @@ def _sse_event(event: str, data: JsonDict) -> str:
 
 @router.post("/edit", response=JobCreateResponse, summary="Edit CV via AI agent")
 def edit_cv(request, body: EditRequest) -> dict[str, str]:
-    job_id = create_job(
-        body.cv,
-        body.message,
-        body.thread_id,
-        body.user_id,
-        body.checkpoint_id,
-        body.revision,
-    )
+    try:
+        job_id = create_job(
+            body.cv,
+            body.message,
+            body.thread_id,
+            body.user_id,
+            body.checkpoint_id,
+            body.revision,
+        )
+    except ThreadNotFoundError:
+        raise HttpError(404, "Thread not found")
     return {"job_id": job_id}
 
 
 @router.get("/threads", response=ThreadListResponse, summary="List assistant threads")
 def get_threads(request, limit: int = 50, status: str = "regular", user_id: str | None = None) -> dict[str, list[JsonDict]]:
-    if status not in {"regular", "archived", "deleted"}:
+    if status not in {"regular", "archived"}:
         raise HttpError(400, "Invalid thread status")
     threads = [_thread_response(record) for record in list_threads(limit=limit, status=status, user_id=user_id)]
     return {"threads": threads}
