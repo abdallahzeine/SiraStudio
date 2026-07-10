@@ -78,7 +78,7 @@ async function createEditJob(cv: CVData, message: string, threadId: string, opti
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     signal: options.signal,
-    body: JSON.stringify({ cv, message, thread_id: threadId, revision: options.revision }),
+    body: JSON.stringify({ cv: migrateCVData(cv), message, thread_id: threadId, revision: options.revision }),
   });
 
   if (!data.job_id) {

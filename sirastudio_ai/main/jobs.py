@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .agent import run_agent
+from .cv_schema import CVData
 from .agent_logging import log_content
 
 JsonDict = dict[str, Any]
@@ -621,7 +622,7 @@ def _mark_completed(job_id: str, result: JsonDict) -> None:
 
 def _run_job(
     job_id: str,
-    cv: JsonDict,
+    cv: CVData,
     message: str,
     thread_id: str,
     user_id: str | None,
@@ -670,7 +671,7 @@ def _on_job_done(job_id: str, future: Any) -> None:
 
 
 def create_job(
-    cv: JsonDict,
+    cv: CVData,
     message: str,
     thread_id: str,
     user_id: str | None = None,
@@ -680,7 +681,7 @@ def create_job(
     _init_db()
     job_id = uuid.uuid4().hex
     now = _utc_now()
-    cv_json = json.dumps(cv or {}, ensure_ascii=False)
+    cv_json = json.dumps(cv.model_dump(by_alias=True), ensure_ascii=False)
     preview = _message_preview(message)
     with _LOCK:
         conn = _connect()

@@ -8,12 +8,12 @@ from ninja import Router
 from ninja.errors import HttpError
 from pydantic import BaseModel, Field, field_validator
 
+from .cv_schema import CVDataParseError, parse_cv
 from .models import CVDocument
 
 router = Router()
 
 _DEFAULT_TITLE = "Untitled CV"
-_REQUIRED_CV_KEYS = ("header", "sections", "template")
 
 
 class ErrorResponse(BaseModel):
@@ -31,6 +31,13 @@ class _CVDocumentBase(BaseModel):
     @classmethod
     def validate_cv(cls, value: dict[str, Any]) -> dict[str, Any]:
         return _validate_cv_json(value)
+
+
+def _validate_cv_json(value: object) -> dict[str, Any]:
+    try:
+        return parse_cv(value).model_dump(by_alias=True)
+    except CVDataParseError as exc:
+        raise ValueError(str(exc)) from None
 
 
 class CVDocumentCreateRequest(_CVDocumentBase):
@@ -56,71 +63,6 @@ class CVDocumentResponse(BaseModel):
 
 class CVDocumentListResponse(BaseModel):
     documents: list[CVDocumentResponse]
-
-
-def _validate_cv_json(value: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ValueError("cv must be an object")
-
-    missing_keys = [key for key in _REQUIRED_CV_KEYS if key not in value]
-    if missing_keys:
-        raise ValueError(f"cv must include: {', '.join(missing_keys)}")
-
-    if not isinstance(value.get("sections"), list):
-        raise ValueError("cv.sections must be a list")
-
-    for section_index, section in enumerate(value["sections"]):
-        if not isinstance(section, dict):
-            raise ValueError(f"cv.sections[{section_index}] must be an object")
-        if not isinstance(section.get("id"), str):
-            raise ValueError(f"cv.sections[{section_index}].id must be a string")
-        if not isinstance(section.get("type"), str):
-            raise ValueError(f"cv.sections[{section_index}].type must be a string")
-        if not isinstance(section.get("title"), str):
-            raise ValueError(f"cv.sections[{section_index}].title must be a string")
-        if not isinstance(section.get("layout"), dict):
-            raise ValueError(f"cv.sections[{section_index}].layout must be an object")
-
-        content = section.get("content")
-        if not isinstance(content, dict):
-            raise ValueError(f"cv.sections[{section_index}].content must be an object")
-        schema = content.get("schema")
-        items = content.get("items")
-        if not isinstance(schema, list):
-            raise ValueError(f"cv.sections[{section_index}].content.schema must be a list")
-        if not isinstance(items, list):
-            raise ValueError(f"cv.sections[{section_index}].content.items must be a list")
-
-        schema_keys = set()
-        for field_index, field in enumerate(schema):
-            if not isinstance(field, dict):
-                raise ValueError(f"cv.sections[{section_index}].content.schema[{field_index}] must be an object")
-            if not isinstance(field.get("key"), str):
-                raise ValueError(f"cv.sections[{section_index}].content.schema[{field_index}].key must be a string")
-            schema_keys.add(field["key"])
-
-        for item_index, item in enumerate(items):
-            if not isinstance(item, dict):
-                raise ValueError(f"cv.sections[{section_index}].content.items[{item_index}] must be an object")
-            if not isinstance(item.get("id"), str):
-                raise ValueError(f"cv.sections[{section_index}].content.items[{item_index}].id must be a string")
-            fields = item.get("fields")
-            if not isinstance(fields, dict):
-                raise ValueError(f"cv.sections[{section_index}].content.items[{item_index}].fields must be an object")
-            for key, field_value in fields.items():
-                if key not in schema_keys:
-                    raise ValueError(
-                        f"cv.sections[{section_index}].content.items[{item_index}].fields.{key} is not in schema"
-                    )
-                if isinstance(field_value, str):
-                    continue
-                if isinstance(field_value, list) and all(isinstance(entry, str) for entry in field_value):
-                    continue
-                raise ValueError(
-                    f"cv.sections[{section_index}].content.items[{item_index}].fields.{key} must be a string or list of strings"
-                )
-
-    return value
 
 
 def _normalize_title(title: str | None) -> str:

@@ -1,16 +1,52 @@
-﻿import asyncio
+﻿from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+from copy import deepcopy
 import json
 import tempfile
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event
 from pathlib import Path
-from typing import Any, override
+from typing import Any, Literal, TypeAlias, TypedDict, override
 from unittest.mock import patch
 
 from django.test import Client, TestCase, override_settings
 
 from . import jobs
+from .cv_schema import CVData, SCAFFOLD_CV_FIXTURE, TemplateId, parse_cv
+
+
+TemplateColumns: TypeAlias = Literal[1, 2]
+
+
+class ToolEvent(TypedDict):
+    id: str
+    name: str
+    status: str
+
+
+ToolEventHandler: TypeAlias = Callable[[ToolEvent], None]
+
+
+def _cv_fixture(
+    *,
+    template_id: TemplateId = "single-column",
+    columns: TemplateColumns = 1,
+) -> CVData:
+    fixture = deepcopy(SCAFFOLD_CV_FIXTURE)
+    template: dict[str, object] = {"id": template_id, "columns": columns}
+    if template_id == "sidebar-left":
+        template.update({"sidebarSide": "left", "sidebarSectionIds": ["summary"]})
+    elif template_id == "sidebar-right":
+        template.update({"sidebarSide": "right", "sidebarSectionIds": ["summary"]})
+    fixture["template"] = template
+    return parse_cv(fixture)
+
+
+def _cv_payload(cv: CVData) -> dict[str, object]:
+    return cv.model_dump(by_alias=True)
 
 
 class CVDocumentApiTests(TestCase):
@@ -18,12 +54,13 @@ class CVDocumentApiTests(TestCase):
         self.client = Client()
 
     def test_cv_document_crud_revision_conflict_and_archive(self):
+        create_cv = _cv_fixture(template_id="single-column", columns=1)
         create = self.client.post(
             "/api/cv-documents",
             data=json.dumps(
                 {
                     "title": "Ada CV",
-                    "cv": self._cv(template="classic"),
+                    "cv": _cv_payload(create_cv),
                 }
             ),
             content_type="application/json",
@@ -33,7 +70,10 @@ class CVDocumentApiTests(TestCase):
         document_id = created["id"]
         self.assertEqual(created["title"], "Ada CV")
         self.assertEqual(created["revision"], 1)
-        self.assertEqual(created["cv"]["template"], "classic")
+        created_cv = parse_cv(created["cv"])
+        self.assertEqual(created_cv.template.id, "single-column")
+        self.assertEqual(created_cv.template.columns, 1)
+        self.assertEqual(created_cv.sections[0].type, "summary")
 
         listed = self.client.get("/api/cv-documents")
         self.assertEqual(listed.status_code, 200)
@@ -43,12 +83,13 @@ class CVDocumentApiTests(TestCase):
         self.assertEqual(retrieved.status_code, 200)
         self.assertEqual(retrieved.json()["id"], document_id)
 
+        update_cv = _cv_fixture(template_id="sidebar-left", columns=2)
         update = self.client.put(
             f"/api/cv-documents/{document_id}",
             data=json.dumps(
                 {
                     "title": "Ada Updated CV",
-                    "cv": self._cv(template="modern"),
+                    "cv": _cv_payload(update_cv),
                     "base_revision": 1,
                 }
             ),
@@ -58,13 +99,15 @@ class CVDocumentApiTests(TestCase):
         updated = update.json()
         self.assertEqual(updated["title"], "Ada Updated CV")
         self.assertEqual(updated["revision"], 2)
-        self.assertEqual(updated["cv"]["template"], "modern")
+        updated_cv = parse_cv(updated["cv"])
+        self.assertEqual(updated_cv.template.id, "sidebar-left")
+        self.assertEqual(updated_cv.template.columns, 2)
 
         conflict = self.client.put(
             f"/api/cv-documents/{document_id}",
             data=json.dumps(
                 {
-                    "cv": self._cv(template="compact"),
+                    "cv": _cv_payload(_cv_fixture(template_id="sidebar-right", columns=2)),
                     "base_revision": 1,
                 }
             ),
@@ -84,11 +127,17 @@ class CVDocumentApiTests(TestCase):
         retrieved_after_delete = self.client.get(f"/api/cv-documents/{document_id}")
         self.assertEqual(retrieved_after_delete.status_code, 404)
 
-    def test_cv_document_create_requires_shallow_cv_shape(self):
+    def test_cv_document_create_requires_valid_cv_data_shape(self):
         cases = [
             {"cv": ["not", "an", "object"]},
             {"cv": {"header": {}, "sections": []}},
-            {"cv": {"header": {}, "sections": {}, "template": "classic"}},
+            {
+                "cv": {
+                    "header": {},
+                    "sections": {},
+                    "template": {"id": "single-column", "columns": 1},
+                }
+            },
         ]
 
         for body in cases:
@@ -100,17 +149,10 @@ class CVDocumentApiTests(TestCase):
                 )
                 self.assertEqual(response.status_code, 422)
 
-    def _cv(self, template: str = "classic") -> dict:
-        return {
-            "header": {"name": "Ada Lovelace"},
-            "sections": [],
-            "template": template,
-        }
-
 
 class AgentBackendSmokeTests(TestCase):
-    client: Any = None
-    tmp: Any = None
+    client: Client
+    tmp: tempfile.TemporaryDirectory[str]
     old_db_path: Path = Path()
 
     @override
@@ -129,23 +171,30 @@ class AgentBackendSmokeTests(TestCase):
 
     def test_agent_routes_job_and_sse_smoke(self) -> None:
         def fake_run_agent(
-            cv: dict[str, Any],
+            cv: CVData,
             message: str,
             thread_id: str,
             run_id: str | None = None,
-            on_tool_event: Any = None,
-            **kwargs: Any,
-        ) -> dict[str, Any]:
+            user_id: str | None = None,
+            checkpoint_id: str | None = None,
+            input_revision: int | None = None,
+            on_tool_event: ToolEventHandler | None = None,
+        ) -> dict[str, object]:
             if on_tool_event:
                 on_tool_event({"id": "tool-1", "name": "read_cv", "status": "completed"})
-            return {"cv": cv, "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
+            return {
+                "cv": _cv_payload(cv),
+                "reply": "Done.",
+                "run_id": run_id or "run-1",
+                "metadata": {},
+            }
 
         with patch("main.jobs.run_agent", fake_run_agent):
-            health: Any = self.client.get("/api/agent/health")
+            health = self.client.get("/api/agent/health")
             self.assertEqual(health.status_code, 200)
             self.assertTrue(health.json()["jobs_db"])
 
-            thread: Any = self.client.post(
+            thread = self.client.post(
                 "/api/agent/threads",
                 data=json.dumps({"title": "Smoke"}),
                 content_type="application/json",
@@ -153,15 +202,16 @@ class AgentBackendSmokeTests(TestCase):
             self.assertEqual(thread.status_code, 200)
             thread_id = thread.json()["thread_id"]
 
-            listed: Any = self.client.get("/api/agent/threads")
+            listed = self.client.get("/api/agent/threads")
             self.assertEqual(listed.status_code, 200)
             self.assertTrue(any(item["thread_id"] == thread_id for item in listed.json()["threads"]))
 
-            edit: Any = self.client.post(
+            request_cv = _cv_fixture()
+            edit = self.client.post(
                 "/api/agent/edit",
                 data=json.dumps(
                     {
-                        "cv": {"header": {}, "sections": []},
+                        "cv": _cv_payload(request_cv),
                         "message": "Read my CV",
                         "thread_id": thread_id,
                         "revision": 1,
@@ -175,7 +225,10 @@ class AgentBackendSmokeTests(TestCase):
             status = self._wait_for_job(job_id)
             self.assertEqual(status["status"], "completed")
             self.assertEqual(status["reply"], "Done.")
-            self.assertEqual(status["cv"], {"header": {}, "sections": []})
+            response_cv = parse_cv(status["cv"])
+            self.assertEqual(response_cv.header.name, request_cv.header.name)
+            self.assertEqual(response_cv.sections[0].type, "summary")
+            self.assertEqual(response_cv.sections[0].layout.columns, 1)
 
             events: Any = self.client.get(f"/api/agent/jobs/{job_id}/events")
             body = self._sse_body(events)
@@ -196,7 +249,7 @@ class AgentBackendSmokeTests(TestCase):
         jobs._MAX_RUNNING_JOBS = 1
 
         def fake_run_agent(
-            cv: dict[str, Any],
+            cv: CVData,
             message: str,
             thread_id: str,
             run_id: str | None = None,
@@ -204,7 +257,7 @@ class AgentBackendSmokeTests(TestCase):
         ) -> dict[str, Any]:
             agent_started.set()
             self.assertTrue(agent_release.wait(timeout=2))
-            return {"cv": cv, "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
+            return {"cv": _cv_payload(cv), "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
 
         original_run_job = jobs._run_job
 
@@ -218,7 +271,7 @@ class AgentBackendSmokeTests(TestCase):
                 "/api/agent/edit",
                 data=json.dumps(
                     {
-                        "cv": {"header": {}, "sections": []},
+                        "cv": _cv_payload(_cv_fixture()),
                         "message": "Read my CV",
                         "thread_id": thread_id,
                     }
@@ -274,7 +327,7 @@ class AgentBackendSmokeTests(TestCase):
         finish_job = Event()
 
         def fake_run_agent(
-            cv: dict[str, Any],
+            cv: CVData,
             message: str,
             thread_id: str,
             run_id: str | None = None,
@@ -283,7 +336,7 @@ class AgentBackendSmokeTests(TestCase):
             if message == "Wait for deletion":
                 job_started.set()
                 self.assertTrue(finish_job.wait(timeout=2))
-            return {"cv": cv, "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
+            return {"cv": _cv_payload(cv), "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
 
         with patch("main.jobs.run_agent", fake_run_agent):
             deleted_thread = self.client.post(
@@ -295,7 +348,7 @@ class AgentBackendSmokeTests(TestCase):
                 "/api/agent/edit",
                 data=json.dumps(
                     {
-                        "cv": {"header": {}, "sections": []},
+                        "cv": _cv_payload(_cv_fixture()),
                         "message": "Wait for deletion",
                         "thread_id": deleted_thread,
                     }
@@ -324,7 +377,7 @@ class AgentBackendSmokeTests(TestCase):
                 "/api/agent/edit",
                 data=json.dumps(
                     {
-                        "cv": {"header": {}, "sections": []},
+                        "cv": _cv_payload(_cv_fixture()),
                         "message": "Do not create a job",
                         "thread_id": deleted_thread,
                     }
@@ -353,7 +406,7 @@ class AgentBackendSmokeTests(TestCase):
                 "/api/agent/edit",
                 data=json.dumps(
                     {
-                        "cv": {"header": {}, "sections": []},
+                        "cv": _cv_payload(_cv_fixture()),
                         "message": "Resume this thread",
                         "thread_id": archived_thread,
                     }
@@ -391,7 +444,7 @@ class AgentBackendSmokeTests(TestCase):
                 "/api/agent/edit",
                 data=json.dumps(
                     {
-                        "cv": {"header": {}, "sections": []},
+                        "cv": _cv_payload(_cv_fixture()),
                         "message": "Update my CV",
                         "thread_id": "request-error",
                     }
@@ -417,7 +470,7 @@ class AgentBackendSmokeTests(TestCase):
                 "/api/agent/edit",
                 data=json.dumps(
                     {
-                        "cv": {"header": {}, "sections": []},
+                        "cv": _cv_payload(_cv_fixture()),
                         "message": "Update my CV",
                         "thread_id": "job-error",
                     }
@@ -465,7 +518,7 @@ class AgentBackendSmokeTests(TestCase):
         release = Event()
 
         def fake_run_agent(
-            cv: dict[str, Any],
+            cv: CVData,
             message: str,
             thread_id: str,
             run_id: str | None = None,
@@ -476,7 +529,7 @@ class AgentBackendSmokeTests(TestCase):
                 on_tool_event({"id": "tool-1", "name": "read_cv", "status": "running"})
             started.set()
             release.wait(timeout=2)
-            return {"cv": cv, "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
+            return {"cv": _cv_payload(cv), "reply": "Done.", "run_id": run_id or "run-1", "metadata": {}}
 
         with patch("main.jobs.run_agent", fake_run_agent):
             thread: Any = self.client.post(
@@ -490,7 +543,7 @@ class AgentBackendSmokeTests(TestCase):
                 "/api/agent/edit",
                 data=json.dumps(
                     {
-                        "cv": {"header": {}, "sections": []},
+                        "cv": _cv_payload(_cv_fixture()),
                         "message": "Read my CV",
                         "thread_id": thread_id,
                     }
@@ -539,10 +592,10 @@ class AgentBackendSmokeTests(TestCase):
 
         with patch("main.jobs._EXECUTOR", InterruptedExecutor()):
             queued_id = jobs.create_job(
-                {"header": {}, "sections": []}, "Restart me", "restart-thread"
+                _cv_fixture(), "Restart me", "restart-thread"
             )
             running_id = jobs.create_job(
-                {"header": {}, "sections": []}, "Restart me too", "restart-thread"
+                _cv_fixture(), "Restart me too", "restart-thread"
             )
         jobs._set_job_status(running_id, "running", run_id="interrupted-run")
         self.assertEqual(jobs.get_job(queued_id)["status"], "queued")
@@ -622,7 +675,7 @@ class AgentBackendSmokeTests(TestCase):
                         "/api/agent/edit",
                         data=json.dumps(
                             {
-                                "cv": {"header": {}, "sections": []},
+                                "cv": _cv_payload(_cv_fixture()),
                                 "message": "Trigger diagnostic logging",
                                 "thread_id": thread_id,
                             }
@@ -647,7 +700,7 @@ class AgentBackendSmokeTests(TestCase):
 
     def _wait_for_job(self, job_id: str) -> dict[str, Any]:
         for _ in range(40):
-            response: Any = self.client.get(f"/api/agent/jobs/{job_id}")
+            response = self.client.get(f"/api/agent/jobs/{job_id}")
             self.assertEqual(response.status_code, 200)
             payload = response.json()
             if payload["status"] in {"completed", "failed"}:

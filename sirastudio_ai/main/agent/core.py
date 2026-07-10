@@ -30,6 +30,7 @@ from .prompts import (
     tool_error_prompt,
 )
 from .tools import ALL_TOOLS
+from ..cv_schema import CVData, parse_cv
 
 
 logger = logging.getLogger("agent_logger")
@@ -245,7 +246,7 @@ def _get_model():
 
 def _load_state(state: CVGraphState):
     metadata = dict(state.get("metadata") or {})
-    cv = state.get("cv") or {}
+    cv = state["cv"]
 
     metadata["cv_read"] = False
     metadata["verification_pending"] = False
@@ -557,7 +558,7 @@ def _get_graph():
 
 
 def run_agent(
-    cv: dict[str, Any],
+    cv: CVData,
     message: str,
     thread_id: str,
     run_id: str | None = None,
@@ -569,7 +570,7 @@ def run_agent(
     run_id = run_id or uuid.uuid4().hex
     inputs: CVGraphState = {
         "messages": [{"role": "user", "content": message}],
-        "cv": cv,
+        "cv": cv.model_dump(by_alias=True),
         "metadata": {"thread_id": thread_id, "run_id": run_id, "input_revision": input_revision},
     }
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
@@ -623,6 +624,10 @@ def run_agent(
 
     reply = _extract_reply(result) or "Done."
     final_cv = result.get("cv", cv)
+    if isinstance(final_cv, CVData):
+        final_cv = final_cv.model_dump(by_alias=True)
+    else:
+        final_cv = parse_cv(final_cv).model_dump(by_alias=True)
 
     logger.info("AGENT_RUN_DONE | thread_id=%s | run_id=%s", thread_id, run_id)
     log_content(
