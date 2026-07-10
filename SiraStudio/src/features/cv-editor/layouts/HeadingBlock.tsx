@@ -13,6 +13,11 @@ interface HeadingBlockProps {
   date?: string;
   datePath?: string;
   dateSlot: DateSlot;
+  titlePlaceholder?: string;
+  subtitlePlaceholder?: string;
+  rolePlaceholder?: string;
+  locationPlaceholder?: string;
+  datePlaceholder?: string;
   titleClassName?: string;
   subtitleClassName?: string;
 }
@@ -24,24 +29,29 @@ export function HeadingBlock({
   location, locationPath,
   date, datePath,
   dateSlot,
+  titlePlaceholder = 'Title',
+  subtitlePlaceholder = 'Subtitle',
+  rolePlaceholder = 'Role',
+  locationPlaceholder = 'City, Country',
+  datePlaceholder = 'MM/YYYY',
   titleClassName = 'text-base font-semibold',
   subtitleClassName = 'text-gray-700 text-sm',
 }: HeadingBlockProps) {
   const dateEl = (date !== undefined && dateSlot !== 'hidden') ? (
     <div className="text-gray-600 text-sm whitespace-nowrap">
       {datePath
-        ? <CVTextEditor value={date} path={datePath} placeholder="MM/YYYY" />
+        ? <CVTextEditor value={date} path={datePath} placeholder={datePlaceholder} />
         : date}
     </div>
   ) : null;
 
   const locationEl = location !== undefined && locationPath ? (
-    <CVTextEditor value={location} path={locationPath} placeholder="City, Country" className="text-gray-500" />
+    <CVTextEditor value={location} path={locationPath} placeholder={locationPlaceholder} className="text-gray-500" />
   ) : null;
 
   const subtitleEl = (subtitle !== undefined && subtitlePath) ? (
     <div className={subtitleClassName}>
-      <CVTextEditor value={subtitle} path={subtitlePath} placeholder="Subtitle" />
+      <CVTextEditor value={subtitle} path={subtitlePath} placeholder={subtitlePlaceholder} />
       {locationEl && (
         <> <span className="text-gray-400">·</span> {locationEl}</>
       )}
@@ -52,13 +62,13 @@ export function HeadingBlock({
 
   const roleEl = role !== undefined && rolePath ? (
     <div className={subtitleClassName}>
-      <CVTextEditor value={role} path={rolePath} placeholder="Role" />
+      <CVTextEditor value={role} path={rolePath} placeholder={rolePlaceholder} />
     </div>
   ) : null;
 
   const titleEl = (
     <div className={`${titleClassName} leading-tight`} role="heading" aria-level={3}>
-      <CVTextEditor value={title} path={titlePath} placeholder="Title" />
+      <CVTextEditor value={title} path={titlePath} placeholder={titlePlaceholder} />
     </div>
   );
 
@@ -80,7 +90,7 @@ export function HeadingBlock({
     return (
       <div className="text-left">
         <div className={`${titleClassName} leading-tight`} role="heading" aria-level={3}>
-          <CVTextEditor value={title} path={titlePath} placeholder="Title" />
+          <CVTextEditor value={title} path={titlePath} placeholder={titlePlaceholder} />
           {hasDate && <span className="text-gray-400 mx-1">–</span>}
           {hasDate && dateEl}
         </div>

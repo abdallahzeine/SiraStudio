@@ -2,6 +2,10 @@
 // Toolbar Component
 // ============================================================================
 
+import { useCallback, useState } from 'react';
+import type { CVSection } from '../../../shared/types';
+import { useDispatch } from '../../../app/store';
+import { AddSectionModal } from './AddSectionModal';
 import { useFocusedEditor } from '../editor/focusedEditorContext';
 
 interface ToolbarProps {
@@ -20,6 +24,12 @@ export function Toolbar({
   panelOffsetX = 0,
 }: ToolbarProps) {
   const editor = useFocusedEditor();
+  const dispatch = useDispatch();
+  const [isAddSectionOpen, setIsAddSectionOpen] = useState(false);
+
+  const handleAddSection = useCallback((section: CVSection) => {
+    dispatch({ op: 'insert', path: 'sections[-1]', value: section });
+  }, [dispatch]);
 
   const formatButtons = [
     {
@@ -46,11 +56,21 @@ export function Toolbar({
   ];
 
   return (
-    <div
-      className="no-print toolbar-bounce-in fixed bottom-6 left-1/2 -translate-x-1/2 z-20 flex flex-wrap items-center justify-center gap-2 px-4 py-2 bg-white/95 backdrop-blur border border-gray-200 shadow-lg rounded-2xl print:hidden max-w-[95vw]"
-      style={{ left: `calc(50% - ${panelOffsetX}px)` }}
-    >
-      <button onClick={onReset}
+    <>
+      <div
+        className="no-print toolbar-bounce-in fixed bottom-6 left-1/2 -translate-x-1/2 z-20 flex flex-wrap items-center justify-center gap-2 px-4 py-2 bg-white/95 backdrop-blur border border-gray-200 shadow-lg rounded-2xl print:hidden max-w-[95vw]"
+        style={{ left: `calc(50% - ${panelOffsetX}px)` }}
+      >
+        <button onClick={() => setIsAddSectionOpen(true)}
+          className="toolbar-btn h-10 sm:h-auto px-3 py-1.5 text-sm rounded-xl border border-violet-300 bg-violet-50 text-violet-700 hover:bg-violet-100 transition-colors shadow-sm flex items-center gap-1"
+          title="Add section"
+        >
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          <span className="hidden sm:inline">Add section</span>
+        </button>
+        <button onClick={onReset}
         className="toolbar-btn h-10 sm:h-auto px-3 py-1.5 text-sm rounded-xl border border-gray-300 bg-white text-gray-600 hover:bg-gray-50 hover:text-gray-800 transition-colors shadow-sm flex items-center gap-1">
         <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -98,7 +118,13 @@ export function Toolbar({
           {label}
         </button>
       ))}
-      <span className="hidden sm:inline text-xs text-gray-400 italic ml-1">Select text</span>
-    </div>
+        <span className="hidden sm:inline text-xs text-gray-400 italic ml-1">Select text</span>
+      </div>
+      <AddSectionModal
+        open={isAddSectionOpen}
+        onClose={() => setIsAddSectionOpen(false)}
+        onCreate={handleAddSection}
+      />
+    </>
   );
 }

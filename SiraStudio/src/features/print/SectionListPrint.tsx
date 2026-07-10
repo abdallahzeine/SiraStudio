@@ -27,33 +27,6 @@ export function SectionListPrint({ sections, dateFormat }: SectionListPrintProps
         const sectionItemsClass = section.layout.columns === 2 ? 'columns-2' : '';
         const { items, schema } = section.content;
 
-        if (section.type === 'spacer') {
-          const spacerItems = items.length === 0
-            ? [{ id: `${section.id}-spacer`, fields: { body: '32' } }]
-            : items;
-
-          return (
-            <Fragment key={section.id}>
-              {spacerItems.map((item, itemIndex) => (
-                <Fragment key={item.id}>
-                  {renderPrint
-                    ? renderPrint({
-                      item,
-                      section,
-                      layout: section.layout,
-                      sectionIndex,
-                      index: itemIndex,
-                      total: spacerItems.length,
-                      dateFormat,
-                      schema,
-                    })
-                    : renderItemFallback(section, item)}
-                </Fragment>
-              ))}
-            </Fragment>
-          );
-        }
-
         return (
           <Fragment key={section.id}>
             <hr className="border-t border-gray-300 mb-2" />

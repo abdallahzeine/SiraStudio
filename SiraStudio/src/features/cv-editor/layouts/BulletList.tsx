@@ -20,6 +20,7 @@ interface BulletListProps {
   bullets: string[];
   bulletsPath: string;
   iconStyle: IconStyle;
+  bulletPlaceholder?: string;
 }
 
 const iconChar: Record<IconStyle, string> = {
@@ -38,6 +39,7 @@ function SortableBullet({
   total,
   onMove,
   onDelete,
+  placeholder,
 }: {
   bulletId: string;
   icon: string;
@@ -47,6 +49,7 @@ function SortableBullet({
   total: number;
   onMove: (d: -1 | 1) => void;
   onDelete: () => void;
+  placeholder: string;
 }) {
   const {
     attributes,
@@ -79,14 +82,14 @@ function SortableBullet({
         multiline
         value={value}
         path={path}
-        placeholder="Bullet point..."
+        placeholder={placeholder}
         className="flex-1"
       />
     </li>
   );
 }
 
-export function BulletList({ bullets, bulletsPath, iconStyle }: BulletListProps) {
+export function BulletList({ bullets, bulletsPath, iconStyle, bulletPlaceholder = 'Bullet point...' }: BulletListProps) {
   const dispatch = useDispatch();
   const icon = iconChar[iconStyle];
 
@@ -144,6 +147,7 @@ export function BulletList({ bullets, bulletsPath, iconStyle }: BulletListProps)
                 total={bullets.length}
                 onMove={(d) => moveBullet(i, d)}
                 onDelete={() => deleteBullet(i)}
+                placeholder={bulletPlaceholder}
               />
             ))}
           </ul>

@@ -39,15 +39,9 @@ export type SectionType =
   | 'projects'
   | 'awards'
   | 'volunteering'
-  | 'custom'
-  | 'spacer';
+  | 'custom';
 
 export type DateFormat = 'MM/YYYY' | 'Mon YYYY' | 'YYYY';
-
-export interface StructuredDate {
-  month: number | null; // 1–12 or null for year-only
-  year: number;
-}
 
 export interface SkillGroup {
   id: string;
@@ -88,10 +82,6 @@ export interface CustomFieldDef {
   kind: CustomFieldKind;
   placeholder?: string;
   required?: boolean;
-}
-
-export interface CustomSectionSchema {
-  fields: CustomFieldDef[];
 }
 
 export type SectionFieldDef = CustomFieldDef;

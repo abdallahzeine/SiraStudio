@@ -87,9 +87,6 @@ export const builtInSectionSchemas: Record<SectionType, SectionFieldDef[]> = {
     { key: 'date', label: 'Date', kind: 'date' },
   ],
   custom: [],
-  spacer: [
-    { key: 'body', label: 'Height', kind: 'text' },
-  ],
 };
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -185,7 +182,7 @@ function normalizeFieldDef(value: unknown): SectionFieldDef | null {
   };
 }
 
-export function schemaForSection(type: SectionType, schema?: unknown): SectionFieldDef[] {
+function schemaForSection(type: SectionType, schema?: unknown): SectionFieldDef[] {
   if (type === 'custom' && isRecord(schema) && Array.isArray(schema.fields)) {
     return schema.fields.map(normalizeFieldDef).filter((field): field is SectionFieldDef => field !== null);
   }
@@ -209,10 +206,6 @@ export function skillGroupFromItem(item: CVItem): SkillGroup {
     label: fieldString(item, 'label'),
     value: fieldString(item, 'value'),
   };
-}
-
-export function newGenericItem(fields: Record<string, SectionFieldValue>): CVItem {
-  return { id: uid(), fields };
 }
 
 function normalizeFields(fields: unknown, schema: SectionFieldDef[]): Record<string, SectionFieldValue> {
@@ -277,10 +270,6 @@ function normalizeSection(value: unknown): CVSection | null {
       items: rawItems.flatMap((item) => normalizeItem(item, type, schema)),
     },
   };
-}
-
-export function normalizeCVData(value: CVData): CVData {
-  return migrateCVData(value);
 }
 
 export function migrateCVData(value: unknown): CVData {

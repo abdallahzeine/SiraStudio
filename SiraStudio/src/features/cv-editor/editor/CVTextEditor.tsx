@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -8,7 +8,7 @@ import { useEditorContext } from './focusedEditorContext';
 import { useLazyEditor } from './useLazyEditor';
 
 interface CVTextEditorProps {
-  value: string;
+  value: string | null | undefined;
   path: string;
   className?: string;
   placeholder?: string;
@@ -26,7 +26,8 @@ interface MountedCVTextEditorProps {
   onAutoFocusHandled: () => void;
 }
 
-function plainTextPreview(value: string): string {
+function plainTextPreview(value: string | null | undefined): string {
+  if (value == null) return '';
   return value
     .replace(/<br\s*\/?>/gi, ' ')
     .replace(/<\/p>/gi, ' ')
@@ -48,8 +49,8 @@ function MountedCVTextEditor({
   const dispatch = useDispatch();
   const { registerEditor } = useEditorContext();
 
-  const editor = useEditor({
-    extensions: [
+  const extensions = useMemo(
+    () => [
       StarterKit.configure({
         heading: false,
         blockquote: false,
@@ -65,40 +66,53 @@ function MountedCVTextEditor({
         placeholder,
       }),
     ],
-    content: value,
-    editorProps: {
+    [placeholder],
+  );
+
+  const editorProps = useMemo(
+    () => ({
       attributes: {
         class: `cv-text-content ${className}`.trim(),
       },
-      handleKeyDown: (_view, event) => {
+      handleKeyDown: (_view: unknown, event: KeyboardEvent) => {
         if (!multiline && event.key === 'Enter') {
           event.preventDefault();
           return true;
         }
         return false;
       },
-    },
+    }),
+    [className, multiline],
+  );
+
+  const editor = useEditor({
+    immediatelyRender: false,
+    extensions,
+    content: value,
+    editorProps,
     onFocus: ({ editor: focusedEditor }) => {
+      if (focusedEditor.isDestroyed) return;
       registerEditor(focusedEditor);
     },
     onUpdate: ({ editor: updatedEditor }) => {
+      if (updatedEditor.isDestroyed) return;
       dispatch({ op: 'set', path, value: updatedEditor.getHTML() });
     },
   });
 
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || editor.isDestroyed) return;
     if (editor.getHTML() === value) return;
     editor.commands.setContent(value, { emitUpdate: false });
   }, [editor, value]);
 
   useEffect(() => {
-    if (!editor || !autoFocusOnMount) return;
+    if (!editor || editor.isDestroyed || !autoFocusOnMount) return;
     editor.commands.focus('end');
     onAutoFocusHandled();
   }, [autoFocusOnMount, editor, onAutoFocusHandled]);
 
-  if (!editor) {
+  if (!editor || editor.isDestroyed) {
     return null;
   }
 
@@ -132,13 +146,14 @@ export function CVTextEditor({
     setAutoFocusOnMount(false);
   }, []);
 
-  const preview = plainTextPreview(value);
+  const safeValue = value ?? '';
+  const preview = plainTextPreview(safeValue);
 
   return (
     <div ref={containerRef} onPointerDownCapture={activateEditor} onFocusCapture={activateEditor} className={highlight ? 'change-highlight' : ''}>
       {shouldMount ? (
         <MountedCVTextEditor
-          value={value}
+          value={safeValue}
           path={path}
           className={className}
           placeholder={placeholder}

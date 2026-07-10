@@ -21,7 +21,7 @@ const iconStyleLabels: Record<IconStyle, string> = {
   chevron: '›',
 };
 
-export function OptionCard({
+function OptionCard({
   label,
   selected,
   recommended,
@@ -53,7 +53,7 @@ export function OptionCard({
   );
 }
 
-export function OptionRow({
+function OptionRow({
   title,
   children,
 }: {

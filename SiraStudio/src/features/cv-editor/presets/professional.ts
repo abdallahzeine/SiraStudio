@@ -74,11 +74,4 @@ export const professionalLayouts: Record<SectionType, SectionLayout> = {
     density: 'compact',
     columns: 1,
   },
-  spacer: {
-    dateSlot: 'hidden',
-    iconStyle: 'none',
-    separator: 'none',
-    density: 'normal',
-    columns: 1,
-  },
 };

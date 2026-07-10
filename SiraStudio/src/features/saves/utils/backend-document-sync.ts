@@ -106,7 +106,7 @@ async function loadCachedBackendDocument(options: BackendDocumentLoadOptions): P
   }
 }
 
-export async function loadBackendCVDocument(
+async function loadBackendCVDocument(
   options: BackendDocumentLoadOptions = {}
 ): Promise<CVDocument | null> {
   const cachedDocument = await loadCachedBackendDocument(options);

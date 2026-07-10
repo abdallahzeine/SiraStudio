@@ -2,6 +2,7 @@ import type {
   SectionType, CVItem, CVSection, SectionLayout, SectionFieldDef,
   DateFormat, DateSlot, IconStyle, Separator, Density,
 } from '../../../shared/types';
+import { uid } from '../../../shared/utils/helpers';
 import type { SectionCategory } from './categories';
 import { summaryDef } from './summary';
 import { workExperienceDef } from './work-experience';
@@ -12,7 +13,7 @@ import { projectsDef } from './projects';
 import { awardsDef } from './awards';
 import { volunteeringDef } from './volunteering';
 import { customDef } from './custom';
-import { spacerDef } from './spacer';
+import { customSectionDefaultLayout } from './customLayout';
 
 export interface RenderEditorProps {
   item: CVItem;
@@ -63,7 +64,7 @@ export interface SectionDef {
   singleItem: boolean;
   addItemLabel: string;
   availablePresetIds: string[];
-  newItem: () => CVItem;
+  newItem: (schema?: SectionFieldDef[]) => CVItem;
   renderItemEditor?: (props: RenderEditorProps) => React.ReactNode;
   renderItemPrint?: (props: RenderPrintProps) => React.ReactNode;
   /** Backward-compatibility fallback during editor renderer migration. */
@@ -82,5 +83,24 @@ export const sectionRegistry: Record<SectionType, SectionDef> = {
   awards: awardsDef,
   volunteering: volunteeringDef,
   custom: customDef,
-  spacer: spacerDef,
 };
+
+interface CreateSectionOptions {
+  title?: string;
+  schema?: SectionFieldDef[];
+}
+
+export function createSection(type: SectionType, options: CreateSectionOptions = {}): CVSection {
+  const definition = sectionRegistry[type];
+  const schema = (options.schema ?? definition.schema).map((field) => ({ ...field }));
+  const items = [type === 'custom' ? definition.newItem(schema) : definition.newItem()];
+  const layout = type === 'custom' ? customSectionDefaultLayout(schema) : definition.defaultLayout;
+
+  return {
+    id: uid(),
+    type,
+    title: options.title ?? definition.defaultTitle,
+    layout: { ...layout },
+    content: { schema, items },
+  };
+}

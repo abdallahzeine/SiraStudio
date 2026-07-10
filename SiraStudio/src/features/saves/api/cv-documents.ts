@@ -11,7 +11,7 @@ export interface SavedCVDocumentResponse {
   updated_at: string;
 }
 
-export interface CreateCVDocumentRequest {
+interface CreateCVDocumentRequest {
   cv: CVData;
   title?: string;
 }
@@ -26,7 +26,7 @@ export interface SaveCVDocumentRequest extends UpdateCVDocumentRequest {
   documentId?: string;
 }
 
-export type ListCVDocumentsResponse =
+type ListCVDocumentsResponse =
   | SavedCVDocumentResponse[]
   | {
       documents?: SavedCVDocumentResponse[];
@@ -78,14 +78,6 @@ async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promi
   return res.json() as Promise<T>;
 }
 
-async function fetchNoContent(input: RequestInfo | URL, init?: RequestInit): Promise<void> {
-  const res = await fetch(input, init);
-
-  if (!res.ok) {
-    throw new CVDocumentAPIError(res.status, await readErrorResponse(res));
-  }
-}
-
 function documentPath(documentId: string): string {
   return `${CV_DOCUMENTS_PATH}/${encodeURIComponent(documentId)}`;
 }
@@ -118,7 +110,7 @@ export async function listCVDocuments(options: CVDocumentRequestOptions = {}): P
   return normalizeCVDocumentListResponse(payload);
 }
 
-export function createCVDocument(
+function createCVDocument(
   request: CreateCVDocumentRequest,
   options: CVDocumentRequestOptions = {}
 ): Promise<SavedCVDocumentResponse> {
@@ -176,14 +168,4 @@ export function saveCVDocument(
     },
     options
   );
-}
-
-export function deleteCVDocument(
-  documentId: string,
-  options: CVDocumentRequestOptions = {}
-): Promise<void> {
-  return fetchNoContent(documentPath(documentId), {
-    method: 'DELETE',
-    signal: options.signal,
-  });
 }

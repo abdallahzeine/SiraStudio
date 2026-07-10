@@ -16,7 +16,13 @@ function toPatchArray(patch: Patch | Patch[]): Patch[] {
 
 const HIGHLIGHT_TTL = 10_000;
 
-export function createCVStore(initial: CVDocument): StoreAPI {
+interface CreateCVStoreOptions {
+  /** When false, edits stay in memory only (used by ephemeral previews). */
+  persist?: boolean;
+}
+
+export function createCVStore(initial: CVDocument, options: CreateCVStoreOptions = {}): StoreAPI {
+  const persist = options.persist !== false;
   const state = { document: initial };
   const listeners = new Set<(nextDoc: CVDocument) => void>();
   const history = createHistory();
@@ -24,6 +30,8 @@ export function createCVStore(initial: CVDocument): StoreAPI {
   let saveTimeout: ReturnType<typeof setTimeout> | null = null;
 
   const schedulePersist = (doc: CVDocument) => {
+    if (!persist) return;
+
     if (saveTimeout !== null) {
       clearTimeout(saveTimeout);
     }

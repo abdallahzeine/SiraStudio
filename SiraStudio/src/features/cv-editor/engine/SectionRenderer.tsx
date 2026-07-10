@@ -70,9 +70,9 @@ export function SectionRenderer({
     dispatch({
       op: 'insert',
       path: `sections[${sectionIndex}].content.items[-1]`,
-      value: def.newItem(),
+      value: section.type === 'custom' ? def.newItem(schema) : def.newItem(),
     });
-  }, [def, dispatch, sectionIndex]);
+  }, [def, dispatch, schema, section.type, sectionIndex]);
 
   if (!renderEditor) {
     return null;

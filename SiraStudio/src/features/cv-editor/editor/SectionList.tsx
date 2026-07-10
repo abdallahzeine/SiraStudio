@@ -16,7 +16,6 @@ import { CVTextEditor } from './CVTextEditor';
 import { useDndSensors } from './useDndSensors';
 import { ReorderButtons, DeleteButton } from '../layouts/Buttons';
 import { SectionRenderer } from '../engine/SectionRenderer';
-import { fieldString } from '../../../shared/utils/cvContent';
 
 interface SectionListProps {
   sections: CVSection[];
@@ -30,102 +29,6 @@ interface SortableSectionProps {
   isDeleting: boolean;
   onOpenPanel: (type: 'layout-settings', sectionId?: string) => void;
   onDelete: (sectionId: string, sectionIndex: number) => void;
-}
-
-const SPACER_SIZES = [
-  { label: 'XS', value: '8' },
-  { label: 'S', value: '16' },
-  { label: 'M', value: '32' },
-  { label: 'L', value: '56' },
-  { label: 'XL', value: '80' },
-];
-
-function plainText(value: string | undefined): string {
-  return (value ?? '')
-    .replace(/<br\s*\/?>/gi, ' ')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .trim();
-}
-
-function SpacerSectionEditor({
-  section,
-  sectionIndex,
-  total,
-  listeners,
-  onDelete,
-}: {
-  section: CVSection;
-  sectionIndex: number;
-  total: number;
-  listeners: Record<string, unknown>;
-  onDelete: () => void;
-}) {
-  const dispatch = useDispatch();
-  const currentValue = plainText(section.content.items[0] ? fieldString(section.content.items[0], 'body') : undefined) || '32';
-  const height = Number.parseInt(currentValue, 10);
-
-  const setSpacerHeight = useCallback((value: string) => {
-    const first = section.content.items[0];
-    if (first) {
-      dispatch({
-        op: 'replace',
-        path: `sections[${sectionIndex}].content.items[0]`,
-        value: { ...first, fields: { ...first.fields, body: value } },
-      });
-      return;
-    }
-
-    dispatch({
-      op: 'insert',
-      path: `sections[${sectionIndex}].content.items[-1]`,
-      value: { id: `spacer-${section.id}`, fields: { body: value } },
-    });
-  }, [dispatch, section, sectionIndex]);
-
-  return (
-    <>
-      <div style={{ height: Number.isFinite(height) ? height : 32 }} className="hidden print:block" />
-      <div className="no-print my-1 border-2 border-dashed border-violet-200 rounded-lg flex items-center gap-2 px-3 py-1.5 bg-violet-50/30">
-        <div className="flex items-center gap-1 shrink-0">
-          <ReorderButtons
-            index={sectionIndex}
-            total={total}
-            onMove={(delta) => {
-              const target = sectionIndex + delta;
-              if (target < 0 || target >= total) return;
-              dispatch({
-                op: 'move',
-                from: `sections[${sectionIndex}]`,
-                path: `sections[${target}]`,
-              });
-            }}
-            dragHandleProps={{ ...listeners }}
-          />
-          <DeleteButton
-            onClick={() => { if (total > 1) onDelete(); }}
-            title="Delete spacer"
-          />
-        </div>
-        <span className="text-xs text-violet-400 font-medium shrink-0">Spacer:</span>
-        <div className="flex gap-1">
-          {SPACER_SIZES.map((size) => (
-            <button
-              key={size.value}
-              onClick={() => setSpacerHeight(size.value)}
-              className={`text-xs px-2 py-0.5 rounded border transition-colors ${
-                currentValue === size.value
-                  ? 'border-violet-500 bg-violet-500 text-white'
-                  : 'border-violet-200 text-violet-500 hover:border-violet-400'
-              }`}
-            >
-              {size.label}
-            </button>
-          ))}
-        </div>
-      </div>
-    </>
-  );
 }
 
 const SortableSection = memo(function SortableSection({
@@ -157,20 +60,6 @@ const SortableSection = memo(function SortableSection({
     if (total <= 1) return;
     onDelete(section.id, sectionIndex);
   }, [onDelete, section.id, sectionIndex, total]);
-
-  if (section.type === 'spacer') {
-    return (
-      <div ref={setNodeRef} style={style} {...attributes} className={animClass} id={`section-${section.id}`}>
-        <SpacerSectionEditor
-          section={section}
-          sectionIndex={sectionIndex}
-          total={total}
-          listeners={{ ...listeners }}
-          onDelete={handleDelete}
-        />
-      </div>
-    );
-  }
 
   return (
     <div ref={setNodeRef} style={style} {...attributes} className={animClass} id={`section-${section.id}`}>
