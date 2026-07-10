@@ -3,6 +3,8 @@ import type {
   CVItem,
   CVSection,
   CustomFieldDef,
+  DateFormat,
+  IconType,
   SectionFieldDef,
   SectionFieldValue,
   SectionLayout,
@@ -14,6 +16,34 @@ import { defaultLayoutFor, uid } from './helpers';
 type UnknownRecord = Record<string, unknown>;
 
 const FIELD_KINDS = new Set(['text', 'multiline', 'date', 'bullets', 'tags', 'pairs']);
+const DATE_FORMATS: ReadonlySet<DateFormat> = new Set(['MM/YYYY', 'Mon YYYY', 'YYYY']);
+const ICON_TYPES: ReadonlySet<IconType> = new Set([
+  'github',
+  'linkedin',
+  'twitter',
+  'globe',
+  'mail',
+  'phone',
+  'portfolio',
+  'youtube',
+  'instagram',
+  'facebook',
+  'custom',
+]);
+const DATE_SLOTS: ReadonlySet<SectionLayout['dateSlot']> = new Set([
+  'right-inline',
+  'below-title',
+  'left-margin',
+  'hidden',
+]);
+const ICON_STYLES: ReadonlySet<SectionLayout['iconStyle']> = new Set(['none', 'bullet', 'dash', 'chevron']);
+const SEPARATORS: ReadonlySet<SectionLayout['separator']> = new Set(['none', 'rule', 'dot', 'space']);
+const DENSITIES: ReadonlySet<SectionLayout['density']> = new Set(['compact', 'normal', 'relaxed']);
+const TEMPLATE_IDS: ReadonlySet<CVData['template']['id']> = new Set([
+  'single-column',
+  'sidebar-left',
+  'sidebar-right',
+]);
 
 export const builtInSectionSchemas: Record<SectionType, SectionFieldDef[]> = {
   summary: [
@@ -76,6 +106,67 @@ function normalizeString(value: unknown): string {
 
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
+function isSupportedValue<T extends string>(value: unknown, values: ReadonlySet<T>): value is T {
+  return typeof value === 'string' && values.has(value as T);
+}
+
+function normalizeHeader(value: unknown): CVData['header'] {
+  const source = isRecord(value) ? value : {};
+  const socialLinks = Array.isArray(source.socialLinks)
+    ? source.socialLinks.filter(isRecord).map((link, index) => ({
+        id: typeof link.id === 'string' ? link.id : `social-${index + 1}`,
+        url: normalizeString(link.url),
+        label: normalizeString(link.label),
+        iconType: isSupportedValue(link.iconType, ICON_TYPES) ? link.iconType : 'globe',
+        displayOrder: typeof link.displayOrder === 'number' && Number.isInteger(link.displayOrder)
+          ? link.displayOrder
+          : index + 1,
+        ...(typeof link.customIconUrl === 'string' ? { customIconUrl: link.customIconUrl } : {}),
+        ...(typeof link.color === 'string' ? { color: link.color } : {}),
+      }))
+    : [];
+
+  return {
+    name: normalizeString(source.name),
+    location: normalizeString(source.location),
+    phone: normalizeString(source.phone),
+    email: normalizeString(source.email),
+    socialLinks,
+    ...(typeof source.headline === 'string' ? { headline: source.headline } : {}),
+  };
+}
+
+function normalizeLayout(value: unknown, type: SectionType): SectionLayout {
+  const fallback = defaultLayoutFor(type);
+  const source = isRecord(value) ? value : {};
+
+  return {
+    dateSlot: isSupportedValue(source.dateSlot, DATE_SLOTS) ? source.dateSlot : fallback.dateSlot,
+    iconStyle: isSupportedValue(source.iconStyle, ICON_STYLES) ? source.iconStyle : fallback.iconStyle,
+    separator: isSupportedValue(source.separator, SEPARATORS) ? source.separator : fallback.separator,
+    density: isSupportedValue(source.density, DENSITIES) ? source.density : fallback.density,
+    columns: source.columns === 2 ? 2 : 1,
+    ...(typeof source.presetId === 'string' ? { presetId: source.presetId } : {}),
+  };
+}
+
+function normalizeTemplate(value: unknown): CVData['template'] {
+  const source = isRecord(value) ? value : {};
+  const sidebarSide = source.sidebarSide === 'left' || source.sidebarSide === 'right'
+    ? source.sidebarSide
+    : undefined;
+  const sidebarSectionIds = Array.isArray(source.sidebarSectionIds)
+    ? source.sidebarSectionIds.filter((id): id is string => typeof id === 'string')
+    : undefined;
+
+  return {
+    id: isSupportedValue(source.id, TEMPLATE_IDS) ? source.id : 'single-column',
+    columns: source.columns === 2 ? 2 : 1,
+    ...(sidebarSide ? { sidebarSide } : {}),
+    ...(sidebarSectionIds ? { sidebarSectionIds } : {}),
+  };
 }
 
 function normalizeFieldDef(value: unknown): SectionFieldDef | null {
@@ -180,7 +271,7 @@ function normalizeSection(value: unknown): CVSection | null {
     id: typeof value.id === 'string' ? value.id : uid(),
     type,
     title: typeof value.title === 'string' ? value.title : '',
-    layout: isRecord(value.layout) ? value.layout as unknown as SectionLayout : defaultLayoutFor(type),
+    layout: normalizeLayout(value.layout, type),
     content: {
       schema,
       items: rawItems.flatMap((item) => normalizeItem(item, type, schema)),
@@ -199,13 +290,9 @@ export function migrateCVData(value: unknown): CVData {
     : [];
 
   return {
-    header: isRecord(source.header)
-      ? source.header as unknown as CVData['header']
-      : { name: '', location: '', phone: '', email: '', socialLinks: [] },
+    header: normalizeHeader(source.header),
     sections,
-    template: isRecord(source.template)
-      ? source.template as unknown as CVData['template']
-      : { id: 'single-column', columns: 1 },
-    dateFormat: typeof source.dateFormat === 'string' ? source.dateFormat as CVData['dateFormat'] : undefined,
+    template: normalizeTemplate(source.template),
+    dateFormat: isSupportedValue(source.dateFormat, DATE_FORMATS) ? source.dateFormat : undefined,
   };
 }
