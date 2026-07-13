@@ -4,7 +4,8 @@ import type { CVDocument, DispatchResult, Patch, PatchError, StoreAPI } from '..
 import { sanitizeRichText } from '../../app/store/sanitize';
 import { defaultLayoutFor, uid } from '../../shared/utils/helpers';
 import type { CVData, CVItem, CVSection, IconType, SocialLink, SkillGroup } from '../../shared/types';
-import { fieldString, fieldStringArray, migrateCVData, skillGroupFromItem } from '../../shared/utils/cvContent';
+import { fieldBulletArray, fieldString, migrateCVData, migrateLegacyBulletEntries, skillGroupFromItem } from '../../shared/utils/cvContent';
+import { isValidCVData } from '../saves/utils/snapshots';
 import { importJSONWithResolver, type ExternalImportFormat } from './import';
 
 type LegacyCVItem = {
@@ -120,46 +121,18 @@ function ensureStringArray(value: unknown): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function isCVDataLike(value: unknown): value is CVData {
-  const data = migrateCVData(value);
-  if (!isRecord(data.header)) return false;
-  if (!Array.isArray(data.sections)) return false;
-  if (!isRecord(data.template)) return false;
-
-  const header = data.header;
+function migrateLegacyCVData(value: unknown): CVData | null {
   if (
-    typeof header.name !== 'string' ||
-    typeof header.location !== 'string' ||
-    typeof header.phone !== 'string' ||
-    typeof header.email !== 'string' ||
-    !Array.isArray(header.socialLinks)
-  ) {
-    return false;
-  }
-
-  const sections = data.sections;
-  if (
-    sections.some((section) => {
-      if (!isRecord(section)) return true;
-      return (
-        typeof section.id !== 'string' ||
-        typeof section.type !== 'string' ||
-        typeof section.title !== 'string' ||
-        !isRecord(section.content) ||
-        !Array.isArray(section.content.schema) ||
-        !Array.isArray(section.content.items) ||
-        !isRecord(section.layout)
-      );
-    })
-  ) {
-    return false;
-  }
-
-  const template = data.template;
-  if (typeof template.id !== 'string') return false;
-  if (template.columns !== 1 && template.columns !== 2) return false;
-
-  return true;
+    !isRecord(value) ||
+    !isRecord(value.header) ||
+    !isRecord(value.template) ||
+    !Array.isArray(value.sections)
+  ) return null;
+  if (!value.sections.every((section) =>
+    isRecord(section) && isRecord(section.layout) && Array.isArray(section.items)
+  )) return null;
+  const data = migrateCVData(cloneValue(value));
+  return isValidCVData(data) ? data : null;
 }
 
 function toDateRange(startDate: unknown, endDate: unknown): string {
@@ -418,21 +391,20 @@ function resolveImportData(raw: unknown, fmt: ExternalImportFormat): CVData | nu
     return mapJSONResumeToCVData(raw);
   }
 
-  if (isCVDataLike(raw)) {
-    return migrateCVData(cloneValue(raw));
+  if (isRecord(raw) && 'schemaVersion' in raw) {
+    if (raw.schemaVersion === EXTERNAL_SCHEMA_VERSION) {
+      if (isValidCVData(raw.data)) return cloneValue(raw.data);
+      const migrated = migrateLegacyBulletEntries(raw.data);
+      return isValidCVData(migrated) ? migrated : null;
+    }
+    if (raw.schemaVersion === 0) return migrateLegacyCVData(raw.data);
+    return null;
   }
 
-  if (isRecord(raw)) {
-    if (raw.schemaVersion === EXTERNAL_SCHEMA_VERSION && isCVDataLike(raw.data)) {
-      return migrateCVData(cloneValue(raw.data));
-    }
-
-    if ('data' in raw && isCVDataLike(raw.data)) {
-      return migrateCVData(cloneValue(raw.data));
-    }
-  }
-
-  return null;
+  if (isValidCVData(raw)) return cloneValue(raw);
+  const migrated = migrateLegacyBulletEntries(raw);
+  if (isValidCVData(migrated)) return migrated;
+  return migrateLegacyCVData(raw);
 }
 
 function normalizeWhitespace(value: string): string {
@@ -469,8 +441,8 @@ function itemToPlainText(item: CVItem): string[] {
     lines.push(summary ? `  ${body}` : `- ${body}`);
   }
 
-  fieldStringArray(item, 'bullets').forEach((bullet) => {
-    const normalized = stripRichText(bullet);
+  fieldBulletArray(item, 'bullets').forEach((bullet) => {
+    const normalized = stripRichText(bullet.text);
     if (normalized) {
       lines.push(`  * ${normalized}`);
     }
@@ -481,6 +453,11 @@ function itemToPlainText(item: CVItem): string[] {
     lines.push(`  * ${skillGroup.label}: ${skillGroup.value}`.trim());
   }
 
+  item.links?.forEach((link) => {
+    const value = normalizeWhitespace(link.url || link.label);
+    if (value) lines.push(`  * ${value}`);
+  });
+
   const knownKeys = new Set(['title', 'subtitle', 'role', 'location', 'date', 'body', 'bullets', 'label', 'value']);
   Object.keys(item.fields)
     .filter((key) => !knownKeys.has(key))
@@ -488,7 +465,9 @@ function itemToPlainText(item: CVItem): string[] {
     .forEach((key) => {
         const current = item.fields[key];
         if (Array.isArray(current)) {
-          const joined = current.map((entry) => stripRichText(typeof entry === 'string' ? entry : '')).filter(Boolean).join(', ');
+          const joined = current.map((entry) => stripRichText(
+            typeof entry === 'string' ? entry : entry.text
+          )).filter(Boolean).join(', ');
           if (joined) {
             lines.push(`  * ${key}: ${joined}`);
           }
@@ -543,8 +522,8 @@ function renderItemHTML(item: CVItem): string {
     .map((value) => normalizeWhitespace(value ?? ''))
     .filter((value) => value.length > 0);
 
-  const bullets = fieldStringArray(item, 'bullets')
-    .map((bullet) => renderRichHTML(bullet))
+  const bullets = fieldBulletArray(item, 'bullets')
+    .map((bullet) => renderRichHTML(bullet.text))
     .filter((bullet) => bullet.trim().length > 0)
     .map((bullet) => `<li>${bullet}</li>`)
     .join('');
@@ -562,7 +541,7 @@ function renderItemHTML(item: CVItem): string {
           const current = item.fields[key];
           const rendered = Array.isArray(current)
             ? current
-                .map((entry) => (typeof entry === 'string' ? escapeHTML(normalizeWhitespace(entry)) : ''))
+                .map((entry) => escapeHTML(normalizeWhitespace(typeof entry === 'string' ? entry : entry.text)))
                 .filter((entry) => entry.length > 0)
                 .join(', ')
             : escapeHTML(normalizeWhitespace(typeof current === 'string' ? current : ''));
@@ -586,8 +565,18 @@ function renderItemHTML(item: CVItem): string {
   const bulletsHTML = bullets ? `<ul>${bullets}</ul>` : '';
   const groupsHTML = groups ? `<ul class="kv-list">${groups}</ul>` : '';
   const valuesHTML = values ? `<ul class="kv-list">${values}</ul>` : '';
+  const links = item.links
+    ?.map((link) => {
+      const label = escapeHTML(normalizeWhitespace(link.label || link.url));
+      const href = isSafeHref(link.url) ? escapeHTML(link.url) : null;
+      if (!label) return '';
+      return href ? `<li><a href="${href}">${label}</a></li>` : `<li>${label}</li>`;
+    })
+    .filter(Boolean)
+    .join('');
+  const linksHTML = links ? `<ul class="kv-list">${links}</ul>` : '';
 
-  return `<article class="item">${headingHTML}${metaHTML}${bodyHTML}${bulletsHTML}${groupsHTML}${valuesHTML}</article>`;
+  return `<article class="item">${headingHTML}${metaHTML}${bodyHTML}${bulletsHTML}${groupsHTML}${valuesHTML}${linksHTML}</article>`;
 }
 
 function buildHTMLExport(doc: CVDocument): string {

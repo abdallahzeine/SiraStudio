@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -10,14 +10,15 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import type { IconStyle } from '../../../shared/types';
+import type { BulletEntry, IconStyle } from '../../../shared/types';
 import { CVTextEditor } from '../editor/CVTextEditor';
 import { useDndSensors } from '../editor/useDndSensors';
 import { useDispatch } from '../../../app/store';
 import { ReorderButtons, DeleteButton, AddButton } from './Buttons';
+import { uid } from '../../../shared/utils/helpers';
 
 interface BulletListProps {
-  bullets: string[];
+  bullets: BulletEntry[];
   bulletsPath: string;
   iconStyle: IconStyle;
   bulletPlaceholder?: string;
@@ -93,10 +94,7 @@ export function BulletList({ bullets, bulletsPath, iconStyle, bulletPlaceholder 
   const dispatch = useDispatch();
   const icon = iconChar[iconStyle];
 
-  const bulletIds = useMemo(
-    () => bullets.map((_, i) => `bullet-${i}`),
-    [bullets]
-  );
+  const bulletIds = bullets.map((bullet) => bullet.id);
 
   const sensors = useDndSensors();
 
@@ -115,7 +113,7 @@ export function BulletList({ bullets, bulletsPath, iconStyle, bulletPlaceholder 
     }
   }, [bulletIds, bulletsPath, dispatch]);
 
-  const addBullet = () => dispatch({ op: 'insert', path: `${bulletsPath}[-1]`, value: 'New bullet point.' });
+  const addBullet = () => dispatch({ op: 'insert', path: `${bulletsPath}[-1]`, value: { id: uid(), text: 'New bullet point.' } });
   const deleteBullet = (i: number) => dispatch({ op: 'delete', path: `${bulletsPath}[${i}]` });
   const moveBullet = (i: number, delta: -1 | 1) => {
     const target = i + delta;
@@ -136,13 +134,13 @@ export function BulletList({ bullets, bulletsPath, iconStyle, bulletPlaceholder 
       >
         <SortableContext items={bulletIds} strategy={verticalListSortingStrategy}>
           <ul className={`${icon ? 'list-none' : ''} ml-${icon ? '8' : '0'} text-gray-700 text-sm mt-0.5 space-y-0.5`}>
-            {bullets.map((b, i) => (
+            {bullets.map((bullet, i) => (
               <SortableBullet
-                key={bulletIds[i]}
-                bulletId={bulletIds[i]}
+                key={bullet.id}
+                bulletId={bullet.id}
                 icon={icon}
-                value={b}
-                path={`${bulletsPath}[${i}]`}
+                value={bullet.text}
+                path={`${bulletsPath}[${i}].text`}
                 index={i}
                 total={bullets.length}
                 onMove={(d) => moveBullet(i, d)}

@@ -1,4 +1,4 @@
-import { useCallback, Fragment } from 'react';
+import { useCallback } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -13,6 +13,8 @@ import { sectionRegistry } from '../sections/registry';
 import { useDispatch } from '../../../app/store';
 import { AddButton } from '../layouts/Buttons';
 import { useDndSensors } from '../editor/useDndSensors';
+import { ItemLinksProvider } from '../ItemLinks';
+import { keepTogetherReorderPatches } from '../keepTogetherReorder';
 
 interface SectionRendererProps {
   sectionIndex: number;
@@ -32,20 +34,22 @@ export function SectionRenderer({
 
   const sensors = useDndSensors();
 
+  const moveItem = useCallback((fromIndex: number, toIndex: number) => {
+    const itemsPath = `sections[${sectionIndex}].content.items`;
+    const patches = keepTogetherReorderPatches(items, fromIndex, toIndex, itemsPath);
+    if (patches.length > 0) dispatch(patches, { origin: 'editor', label: 'item:reorder' });
+  }, [dispatch, items, sectionIndex]);
+
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     if (over && active.id !== over.id) {
       const oldIndex = items.findIndex((item) => item.id === active.id);
       const newIndex = items.findIndex((item) => item.id === over.id);
       if (oldIndex !== -1 && newIndex !== -1) {
-        dispatch({
-          op: 'move',
-          from: `sections[${sectionIndex}].content.items[${oldIndex}]`,
-          path: `sections[${sectionIndex}].content.items[${newIndex}]`,
-        });
+        moveItem(oldIndex, newIndex);
       }
     }
-  }, [dispatch, items, sectionIndex]);
+  }, [items, moveItem]);
 
   const onChangeItem = useCallback((index: number, item: CVItem) => {
     dispatch({ op: 'replace', path: `sections[${sectionIndex}].content.items[${index}]`, value: item });
@@ -54,12 +58,8 @@ export function SectionRenderer({
   const onMoveItem = useCallback((index: number, delta: -1 | 1) => {
     const target = index + delta;
     if (target < 0 || target >= items.length) return;
-    dispatch({
-      op: 'move',
-      from: `sections[${sectionIndex}].content.items[${index}]`,
-      path: `sections[${sectionIndex}].content.items[${target}]`,
-    });
-  }, [dispatch, items.length, sectionIndex]);
+    moveItem(index, target);
+  }, [items.length, moveItem]);
 
   const onDeleteItem = useCallback((index: number) => {
     if (index < 0 || index >= items.length) return;
@@ -89,7 +89,7 @@ export function SectionRenderer({
         strategy={verticalListSortingStrategy}
       >
         {visibleItems.map((item, idx) => (
-          <Fragment key={item.id}>
+          <ItemLinksProvider key={item.id} links={item.links}>
             {renderEditor({
               item,
               section,
@@ -103,7 +103,7 @@ export function SectionRenderer({
               onDelete: () => onDeleteItem(idx),
               schema,
             })}
-          </Fragment>
+          </ItemLinksProvider>
         ))}
       </SortableContext>
       {!def.singleItem && (

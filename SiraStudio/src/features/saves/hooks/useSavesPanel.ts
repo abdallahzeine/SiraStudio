@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { CVData } from '../../../shared/types';
-import { deleteSnapshot, loadSnapshots, saveSnapshot, type CVSnapshot } from '../utils/snapshots';
+import { deleteSnapshot, loadSnapshots, saveSnapshot } from '../utils/snapshots';
 
 function suggestedNameFor(cv: CVData): string {
   const trimmed = cv.header.name.trim();
@@ -9,7 +9,7 @@ function suggestedNameFor(cv: CVData): string {
 
 export function useSavesPanel(currentCVData: CVData) {
   const suggestedName = suggestedNameFor(currentCVData);
-  const [snapshots, setSnapshots] = useState<CVSnapshot[]>(() => loadSnapshots());
+  const [snapshotCollection, setSnapshotCollection] = useState(loadSnapshots);
   const [saveName, setSaveName] = useState(suggestedName);
   const [isSaveNameDirty, setIsSaveNameDirty] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -35,7 +35,7 @@ export function useSavesPanel(currentCVData: CVData) {
     setSaveName(normalizedName);
     setIsSaveNameDirty(false);
     setConfirmDeleteId(null);
-    setSnapshots(loadSnapshots());
+    setSnapshotCollection(loadSnapshots());
   };
 
   const handleDelete = (id: string) => {
@@ -46,13 +46,14 @@ export function useSavesPanel(currentCVData: CVData) {
 
     deleteSnapshot(id);
     setConfirmDeleteId(null);
-    setSnapshots(loadSnapshots());
+    setSnapshotCollection(loadSnapshots());
   };
 
   const clearConfirmDelete = () => setConfirmDeleteId(null);
 
   return {
-    snapshots,
+    snapshots: snapshotCollection.snapshots,
+    rejectedSnapshotCount: snapshotCollection.rejectedCount,
     effectiveSaveName,
     confirmDeleteId,
     dateFormatter,

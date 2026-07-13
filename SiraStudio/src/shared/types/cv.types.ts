@@ -49,11 +49,18 @@ export interface SkillGroup {
   value: string;
 }
 
-export type SectionFieldValue = string | string[];
+export interface BulletEntry {
+  id: string;
+  text: string;
+}
+
+export type SectionFieldValue = string | string[] | BulletEntry[];
 
 export interface CVItem {
   id: string;
   fields: Record<string, SectionFieldValue>;
+  links?: SocialLink[];
+  keepTogetherGroup?: string;
 }
 
 // ─── Layout types ────────────────────────────────────────────────────────────
@@ -110,6 +117,7 @@ export interface CVSection {
   title: string;
   layout: SectionLayout;
   content: SectionContent;
+  keepTogetherGroup?: string;
 }
 
 export interface CVData {

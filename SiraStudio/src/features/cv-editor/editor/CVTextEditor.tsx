@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
-import Underline from '@tiptap/extension-underline';
 import { useChangeHighlight, useDispatch } from '../../../app/store';
 import { useEditorContext } from './focusedEditorContext';
 import { useLazyEditor } from './useLazyEditor';
@@ -61,7 +60,6 @@ function MountedCVTextEditor({
         listItem: false,
         hardBreak: false,
       }),
-      Underline,
       Placeholder.configure({
         placeholder,
       }),

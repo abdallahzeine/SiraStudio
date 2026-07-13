@@ -1,3 +1,5 @@
+import { ChevronDown, ChevronUp, GripVertical, Plus, X } from 'lucide-react';
+
 interface ReorderButtonsProps {
   index: number;
   total: number;
@@ -12,30 +14,27 @@ export function ReorderButtons({ index, total, onMove, dragHandleProps }: Reorde
         onClick={() => onMove(-1)}
         disabled={index === 0}
         title="Move up"
-        className="w-8 h-8 md:w-5 md:h-5 flex items-center justify-center text-gray-400 hover:text-gray-700 disabled:opacity-20 disabled:cursor-not-allowed text-xs leading-none"
-      >▲</button>
+        className="flex h-8 w-8 items-center justify-center text-gray-400 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-20 md:h-5 md:w-5"
+      >
+        <ChevronUp size={14} />
+      </button>
       {dragHandleProps && (
         <div
           {...dragHandleProps}
           title="Drag to reorder"
-          className="w-8 h-8 md:w-5 md:h-4 flex items-center justify-center cursor-grab active:cursor-grabbing text-gray-400 hover:text-gray-700 rounded transition-colors"
+          className="flex h-8 w-8 cursor-grab items-center justify-center rounded text-gray-400 transition-colors hover:text-gray-700 active:cursor-grabbing md:h-4 md:w-5"
         >
-          <svg className="w-3 h-3" viewBox="0 0 6 12" fill="currentColor">
-            <circle cx="1.5" cy="2" r="1" />
-            <circle cx="4.5" cy="2" r="1" />
-            <circle cx="1.5" cy="6" r="1" />
-            <circle cx="4.5" cy="6" r="1" />
-            <circle cx="1.5" cy="10" r="1" />
-            <circle cx="4.5" cy="10" r="1" />
-          </svg>
+          <GripVertical size={12} />
         </div>
       )}
       <button
         onClick={() => onMove(1)}
         disabled={index === total - 1}
         title="Move down"
-        className="w-8 h-8 md:w-5 md:h-5 flex items-center justify-center text-gray-400 hover:text-gray-700 disabled:opacity-20 disabled:cursor-not-allowed text-xs leading-none"
-      >▼</button>
+        className="flex h-8 w-8 items-center justify-center text-gray-400 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-20 md:h-5 md:w-5"
+      >
+        <ChevronDown size={14} />
+      </button>
     </div>
   );
 }
@@ -50,8 +49,10 @@ export function DeleteButton({ onClick, title = 'Delete' }: DeleteButtonProps) {
     <button
       onClick={onClick}
       title={title}
-      className="no-print w-8 h-8 md:w-5 md:h-5 flex items-center justify-center text-red-300 hover:text-red-600 text-sm leading-none"
-    >✕</button>
+      className="no-print flex h-8 w-8 items-center justify-center text-red-300 hover:text-red-600 md:h-5 md:w-5"
+    >
+      <X size={14} />
+    </button>
   );
 }
 
@@ -64,9 +65,10 @@ export function AddButton({ onClick, label }: AddButtonProps) {
   return (
     <button
       onClick={onClick}
-      className="no-print mt-1 text-xs text-blue-500 hover:text-blue-700 border border-dashed border-blue-300 hover:border-blue-500 rounded px-2 py-0.5 transition-colors"
+      className="no-print mt-1 inline-flex items-center gap-1 rounded border border-dashed border-blue-300 px-2 py-0.5 text-xs text-[#0078D7] transition-colors hover:border-[#0078D7] hover:text-blue-700"
     >
-      + {label}
+      <Plus size={12} />
+      {label}
     </button>
   );
 }

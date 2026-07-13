@@ -3,15 +3,9 @@
 
 # Project IDEA
 
-this project is a CV maker that uses AI agents to generate CV and fill text in the CV.
+this project is a frontend CV maker for creating, editing, and exporting CVs.
 
 uphere is what i think, in more detailes what i am aiming to achieve, Is to build platform to make my CV creation easy and fast and centralized.
-
-what i am expecting in future:
-
-- Make CV by prompting AI agent 
-- Make Ai that can chat with me and make Email by sending detials of Job post, for example and answer my questions about the job or skills set in my CV  
-- Make cover letter by prompting AI agent
 
 ---
 ## Behavioral instructions
@@ -36,16 +30,7 @@ Do not start work from title/body alone.
 ## Fast Folder Map
 ### Root
 - `SiraStudio/` → frontend app
-- `sirastudio_ai/` → backend app
-- `.venv/` → Python environment
-- `run-dev.ps1` → starts frontend + backend
-
-### Backend
-- `sirastudio_ai/sirastudio_ai/` → Django config, settings, URLs
-- `sirastudio_ai/main/` → models, routes, jobs, tests
-- `sirastudio_ai/main/agent/` → agent logic, LLM, prompts, schemas
-- `sirastudio_ai/main/agent/tools/` → agent editing tools
-- `sirastudio_ai/main/migrations/` → database migrations
+- `run-dev.ps1` → starts the frontend
 
 ### Frontend
 - `SiraStudio/public/` → static assets
@@ -54,8 +39,6 @@ Do not start work from title/body alone.
 - `SiraStudio/src/app/store/` → patch-based state store
 - `SiraStudio/src/features/cv-editor/` → CV editor
 - `SiraStudio/src/features/cv-editor/sections/` → section registry/types
-- `SiraStudio/src/features/assistant/` → AI assistant UI
-- `SiraStudio/src/features/assistant/api/` → backend agent calls
 - `SiraStudio/src/features/saves/` → saved CVs panel
 - `SiraStudio/src/features/print/` → print/PDF rendering
 - `SiraStudio/src/features/links/` → social links editor
@@ -66,6 +49,5 @@ Do not start work from title/body alone.
 - CV types → `SiraStudio/src/shared/types/`
 - State logic → `SiraStudio/src/app/store/`
 - Editor sections → `SiraStudio/src/features/cv-editor/sections/`
-- Assistant API → `SiraStudio/src/features/assistant/api/`
 - Print/PDF → `SiraStudio/src/features/print/`
 - External API → `SiraStudio/src/features/external-api/`

@@ -1,4 +1,5 @@
 import { memo, useCallback } from 'react';
+import { Mail, MapPin, Phone } from 'lucide-react';
 import type { CVData, SocialLink } from '../../../shared/types';
 import { CVTextEditor } from './CVTextEditor';
 import { LinkManager } from '../../links';
@@ -86,23 +87,16 @@ const HeaderSection = memo(function HeaderSection({
       )}
       <div className="flex flex-wrap justify-center items-center gap-1 md:gap-4 text-[11px] md:text-sm text-gray-600 mb-1.5 md:mb-3">
         <div className="flex items-center gap-1">
-          <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-            <path fillRule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clipRule="evenodd" />
-          </svg>
+          <MapPin size={16} className="shrink-0" />
           <CVTextEditor value={header.location} path="header.location" placeholder="City, Country" lazy={false} />
         </div>
         <div className="flex items-center gap-1">
-          <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-            <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
-          </svg>
+          <Phone size={16} className="shrink-0" />
           <CVTextEditor value={header.phone} path="header.phone" placeholder="+1 234 567 890" lazy={false} />
         </div>
         <div className="flex items-center gap-1">
-          <svg className="w-4 h-4 shrink-0" fill="currentColor" viewBox="0 0 20 20">
-            <path d="M2.003 5.884L10 9.882l7.997-3.998A2 2 0 0016 4H4a2 2 0 00-1.997 1.884z" />
-            <path d="M18 8.118l-8 4-8-4V14a2 2 0 002 2h12a2 2 0 002-2V8.118z" />
-          </svg>
-          <CVTextEditor value={header.email} path="header.email" placeholder="email@example.com" className="text-blue-600" lazy={false} />
+          <Mail size={16} className="shrink-0" />
+          <CVTextEditor value={header.email} path="header.email" placeholder="email@example.com" className="text-[#0078D7]" lazy={false} />
         </div>
       </div>
       <LinkManager

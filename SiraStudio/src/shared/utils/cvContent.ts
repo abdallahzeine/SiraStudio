@@ -2,6 +2,7 @@ import type {
   CVData,
   CVItem,
   CVSection,
+  BulletEntry,
   CustomFieldDef,
   DateFormat,
   IconType,
@@ -10,6 +11,7 @@ import type {
   SectionLayout,
   SectionType,
   SkillGroup,
+  SocialLink,
 } from '../types';
 import { defaultLayoutFor, uid } from './helpers';
 
@@ -93,6 +95,55 @@ function isRecord(value: unknown): value is UnknownRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function cloneUnknown(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(cloneUnknown);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, cloneUnknown(entry)]));
+}
+
+export function migrateLegacyBulletEntries(value: unknown): unknown {
+  const data = cloneUnknown(value);
+  if (!isRecord(data) || !Array.isArray(data.sections)) return data;
+
+  const ids = new Set<string>();
+  const collectIds = (entry: unknown) => {
+    if (Array.isArray(entry)) entry.forEach(collectIds);
+    else if (isRecord(entry)) {
+      if (typeof entry.id === 'string') ids.add(entry.id);
+      Object.values(entry).forEach(collectIds);
+    }
+  };
+  collectIds(data);
+
+  const nextId = () => {
+    let id = uid();
+    while (ids.has(id)) id = uid();
+    ids.add(id);
+    return id;
+  };
+
+  for (const section of data.sections) {
+    if (!isRecord(section) || !isRecord(section.content)) continue;
+    const { schema, items } = section.content;
+    if (!Array.isArray(schema) || !Array.isArray(items)) continue;
+    const bulletKeys = schema
+      .filter((field) => isRecord(field) && field.kind === 'bullets' && typeof field.key === 'string')
+      .map((field) => field.key as string);
+    for (const item of items) {
+      if (!isRecord(item) || !isRecord(item.fields)) continue;
+      for (const key of bulletKeys) {
+        const bullets = item.fields[key];
+        if (!Array.isArray(bullets)) continue;
+        item.fields[key] = bullets.map((bullet) => (
+          typeof bullet === 'string' ? { id: nextId(), text: bullet } : bullet
+        ));
+      }
+    }
+  }
+
+  return data;
+}
+
 function isSectionType(value: unknown): value is SectionType {
   return typeof value === 'string' && value in builtInSectionSchemas;
 }
@@ -105,32 +156,43 @@ function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
+function normalizeBulletArray(value: unknown): BulletEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (typeof entry === 'string') return [{ id: '', text: entry }];
+    if (!isRecord(entry) || typeof entry.text !== 'string') return [];
+    return [{ id: typeof entry.id === 'string' ? entry.id : '', text: entry.text }];
+  });
+}
+
 function isSupportedValue<T extends string>(value: unknown, values: ReadonlySet<T>): value is T {
   return typeof value === 'string' && values.has(value as T);
 }
 
+function normalizeSocialLinkArray(value: unknown): SocialLink[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isRecord).map((link, index) => ({
+    id: typeof link.id === 'string' ? link.id : '',
+    url: normalizeString(link.url),
+    label: normalizeString(link.label),
+    iconType: isSupportedValue(link.iconType, ICON_TYPES) ? link.iconType : 'globe',
+    displayOrder: typeof link.displayOrder === 'number' && Number.isInteger(link.displayOrder)
+      ? link.displayOrder
+      : index + 1,
+    ...(typeof link.customIconUrl === 'string' ? { customIconUrl: link.customIconUrl } : {}),
+    ...(typeof link.color === 'string' ? { color: link.color } : {}),
+  }));
+}
+
 function normalizeHeader(value: unknown): CVData['header'] {
   const source = isRecord(value) ? value : {};
-  const socialLinks = Array.isArray(source.socialLinks)
-    ? source.socialLinks.filter(isRecord).map((link, index) => ({
-        id: typeof link.id === 'string' ? link.id : `social-${index + 1}`,
-        url: normalizeString(link.url),
-        label: normalizeString(link.label),
-        iconType: isSupportedValue(link.iconType, ICON_TYPES) ? link.iconType : 'globe',
-        displayOrder: typeof link.displayOrder === 'number' && Number.isInteger(link.displayOrder)
-          ? link.displayOrder
-          : index + 1,
-        ...(typeof link.customIconUrl === 'string' ? { customIconUrl: link.customIconUrl } : {}),
-        ...(typeof link.color === 'string' ? { color: link.color } : {}),
-      }))
-    : [];
 
   return {
     name: normalizeString(source.name),
     location: normalizeString(source.location),
     phone: normalizeString(source.phone),
     email: normalizeString(source.email),
-    socialLinks,
+    socialLinks: normalizeSocialLinkArray(source.socialLinks),
     ...(typeof source.headline === 'string' ? { headline: source.headline } : {}),
   };
 }
@@ -195,9 +257,11 @@ export function fieldString(item: CVItem, key: string): string {
   return typeof value === 'string' ? value : '';
 }
 
-export function fieldStringArray(item: CVItem, key: string): string[] {
+export function fieldBulletArray(item: CVItem, key: string): BulletEntry[] {
   const value = item.fields[key];
-  return Array.isArray(value) ? value : [];
+  return Array.isArray(value) && value.every((entry) => isRecord(entry) && typeof entry.id === 'string' && typeof entry.text === 'string')
+    ? value as BulletEntry[]
+    : [];
 }
 
 export function skillGroupFromItem(item: CVItem): SkillGroup {
@@ -214,9 +278,11 @@ function normalizeFields(fields: unknown, schema: SectionFieldDef[]): Record<str
 
   schema.forEach((field) => {
     const value = source[field.key];
-    output[field.key] = field.kind === 'bullets' || field.kind === 'tags'
-      ? normalizeStringArray(value)
-      : normalizeString(value);
+    output[field.key] = field.kind === 'bullets'
+      ? normalizeBulletArray(value)
+      : field.kind === 'tags'
+        ? normalizeStringArray(value)
+        : normalizeString(value);
   });
 
   return output;
@@ -236,23 +302,27 @@ function oldItemToFields(item: UnknownRecord, type: SectionType, schema: Section
 function normalizeItem(value: unknown, type: SectionType, schema: SectionFieldDef[]): CVItem[] {
   if (!isRecord(value)) return [];
 
+  // ponytail: optional links only when present — keeps old items untouched
+  const links = Array.isArray(value.links) ? { links: normalizeSocialLinkArray(value.links) } : {};
+  const keepTogetherGroup = typeof value.keepTogetherGroup === 'string'
+    ? { keepTogetherGroup: value.keepTogetherGroup }
+    : {};
+  const id = typeof value.id === 'string' ? value.id : '';
+
   if (isRecord(value.fields)) {
-    return [{ id: typeof value.id === 'string' ? value.id : uid(), fields: normalizeFields(value.fields, schema) }];
+    return [{ id, fields: normalizeFields(value.fields, schema), ...links, ...keepTogetherGroup }];
   }
 
-  return oldItemToFields(value, type, schema).map((fields) => ({
-    id: typeof value.id === 'string' ? value.id : uid(),
-    fields,
-  }));
+  return oldItemToFields(value, type, schema).map((fields) => ({ id, fields, ...links, ...keepTogetherGroup }));
 }
 
 function normalizeSection(value: unknown): CVSection | null {
   if (!isRecord(value) || !isSectionType(value.type)) return null;
   const type = value.type;
 
-  const schema = isRecord(value.content) && Array.isArray(value.content.schema)
+  const schema = type === 'custom' && isRecord(value.content) && Array.isArray(value.content.schema)
     ? value.content.schema.map(normalizeFieldDef).filter((field): field is CustomFieldDef => field !== null)
-    : schemaForSection(type, value.schema);
+    : schemaForSection(type, type === 'custom' ? value.schema : undefined);
 
   const rawItems = isRecord(value.content) && Array.isArray(value.content.items)
     ? value.content.items
@@ -261,7 +331,7 @@ function normalizeSection(value: unknown): CVSection | null {
       : [];
 
   return {
-    id: typeof value.id === 'string' ? value.id : uid(),
+    id: typeof value.id === 'string' ? value.id : '',
     type,
     title: typeof value.title === 'string' ? value.title : '',
     layout: normalizeLayout(value.layout, type),
@@ -269,7 +339,41 @@ function normalizeSection(value: unknown): CVSection | null {
       schema,
       items: rawItems.flatMap((item) => normalizeItem(item, type, schema)),
     },
+    ...(typeof value.keepTogetherGroup === 'string' ? { keepTogetherGroup: value.keepTogetherGroup } : {}),
   };
+}
+
+function claimUniqueId(seen: Set<string>, reserved: Set<string>, id: string): string {
+  if (id.trim() !== '' && !seen.has(id)) {
+    seen.add(id);
+    return id;
+  }
+  let next = uid();
+  while (next.trim() === '' || reserved.has(next)) next = uid();
+  seen.add(next);
+  reserved.add(next);
+  return next;
+}
+
+function ensureUniquePersistentIds(data: CVData): CVData {
+  const entities: Array<{ id: string }> = [...data.header.socialLinks];
+  for (const section of data.sections) {
+    entities.push(section);
+    for (const item of section.content.items) {
+      entities.push(item, ...(item.links ?? []));
+      for (const field of section.content.schema) {
+        if (field.kind === 'bullets') entities.push(...fieldBulletArray(item, field.key));
+      }
+    }
+  }
+
+  const seen = new Set<string>();
+  const reserved = new Set(entities.map(({ id }) => id).filter((id) => id.trim() !== ''));
+  for (const entity of entities) {
+    entity.id = claimUniqueId(seen, reserved, entity.id);
+  }
+
+  return data;
 }
 
 export function migrateCVData(value: unknown): CVData {
@@ -278,10 +382,10 @@ export function migrateCVData(value: unknown): CVData {
     ? source.sections.map(normalizeSection).filter((section): section is CVSection => section !== null)
     : [];
 
-  return {
+  return ensureUniquePersistentIds({
     header: normalizeHeader(source.header),
     sections,
     template: normalizeTemplate(source.template),
     dateFormat: isSupportedValue(source.dateFormat, DATE_FORMATS) ? source.dateFormat : undefined,
-  };
+  });
 }

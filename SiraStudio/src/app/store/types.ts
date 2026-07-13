@@ -27,7 +27,7 @@ export interface DispatchResult {
 
 export interface DispatchOptions {
   txId?: string;
-  origin: 'editor' | 'external' | 'import' | 'undo' | 'redo' | 'agent';
+  origin: 'editor' | 'external' | 'import' | 'undo' | 'redo';
   label?: string;
 }
 

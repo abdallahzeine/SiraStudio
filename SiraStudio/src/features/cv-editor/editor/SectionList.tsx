@@ -1,4 +1,4 @@
-import { memo, useCallback, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
   DndContext,
   closestCenter,
@@ -14,8 +14,11 @@ import type { CVSection } from '../../../shared/types';
 import { useDispatch } from '../../../app/store';
 import { CVTextEditor } from './CVTextEditor';
 import { useDndSensors } from './useDndSensors';
+import { Check, Link2, Settings } from 'lucide-react';
 import { ReorderButtons, DeleteButton } from '../layouts/Buttons';
 import { SectionRenderer } from '../engine/SectionRenderer';
+import { printBlockKey, usePrintLayout } from '../printLayoutContext';
+import { keepTogetherReorderPatches } from '../keepTogetherReorder';
 
 interface SectionListProps {
   sections: CVSection[];
@@ -28,7 +31,8 @@ interface SortableSectionProps {
   total: number;
   isDeleting: boolean;
   onOpenPanel: (type: 'layout-settings', sectionId?: string) => void;
-  onDelete: (sectionId: string, sectionIndex: number) => void;
+  onDelete: (sectionId: string) => void;
+  onMove: (fromIndex: number, toIndex: number) => void;
 }
 
 const SortableSection = memo(function SortableSection({
@@ -38,8 +42,12 @@ const SortableSection = memo(function SortableSection({
   isDeleting,
   onOpenPanel,
   onDelete,
+  onMove,
 }: SortableSectionProps) {
-  const dispatch = useDispatch();
+  const printLayout = usePrintLayout();
+  const printKey = printBlockKey('section', section.id);
+  const printSelected = printLayout.selected.has(printKey);
+  const printProtected = printLayout.protectedBlocks.has(printKey);
   const {
     attributes,
     listeners,
@@ -58,26 +66,40 @@ const SortableSection = memo(function SortableSection({
   const animClass = isDeleting ? 'animate-section-out' : 'animate-section-in';
   const handleDelete = useCallback(() => {
     if (total <= 1) return;
-    onDelete(section.id, sectionIndex);
-  }, [onDelete, section.id, sectionIndex, total]);
+    onDelete(section.id);
+  }, [onDelete, section.id, total]);
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes} className={animClass} id={`section-${section.id}`}>
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      className={`${animClass} rounded-lg ${printSelected ? 'ring-2 ring-blue-500 ring-offset-2' : ''}`}
+      id={`section-${section.id}`}
+    >
       <hr className="border-t border-gray-300 mb-1 md:mb-2" />
       <section className="mb-2 md:mb-3">
         <div className="flex items-center gap-1 mb-2 md:mb-3">
           <div className="no-print flex items-center gap-1">
+            {printLayout.enabled ? (
+              <button
+                type="button"
+                onClick={() => printLayout.toggle('section', section.id)}
+                className={`flex h-7 items-center gap-1 rounded-lg border px-2 text-xs font-medium ${printSelected ? 'border-blue-500 bg-blue-600 text-white' : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'}`}
+                aria-pressed={printSelected}
+              >
+                {printSelected ? <Check size={13} /> : <Link2 size={13} />}
+                {printProtected ? 'Kept together' : 'Select section'}
+              </button>
+            ) : (
+              <>
             <ReorderButtons
               index={sectionIndex}
               total={total}
               onMove={(delta) => {
                 const target = sectionIndex + delta;
                 if (target < 0 || target >= total) return;
-                dispatch({
-                  op: 'move',
-                  from: `sections[${sectionIndex}]`,
-                  path: `sections[${target}]`,
-                });
+                onMove(sectionIndex, target);
               }}
               dragHandleProps={{ ...listeners }}
             />
@@ -85,6 +107,8 @@ const SortableSection = memo(function SortableSection({
               onClick={handleDelete}
               title="Delete section"
             />
+              </>
+            )}
           </div>
           <div className="text-sm md:text-lg font-bold text-gray-800 flex-1" role="heading" aria-level={2}>
             <CVTextEditor
@@ -94,21 +118,13 @@ const SortableSection = memo(function SortableSection({
               placeholder="SECTION TITLE"
             />
           </div>
-          <button
+          {!printLayout.enabled && <button
             onClick={() => onOpenPanel('layout-settings', section.id)}
             title="Layout settings"
             className="no-print w-8 h-8 md:w-7 md:h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
-              />
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
+            <Settings size={16} />
+          </button>}
         </div>
         <SectionRenderer sectionIndex={sectionIndex} section={section} />
       </section>
@@ -121,16 +137,29 @@ SortableSection.displayName = 'SortableSection';
 export const SectionList = memo(function SectionList({ sections, onOpenPanel }: SectionListProps) {
   const dispatch = useDispatch();
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const sectionsRef = useRef(sections);
 
-  const handleDeleteSection = useCallback((sectionId: string, sectionIndex: number) => {
+  useEffect(() => {
+    sectionsRef.current = sections;
+  }, [sections]);
+
+  const handleDeleteSection = useCallback((sectionId: string) => {
     setDeletingId(sectionId);
     setTimeout(() => {
-      dispatch({ op: 'delete', path: `sections[${sectionIndex}]` });
+      const sectionIndex = sectionsRef.current.findIndex((section) => section.id === sectionId);
+      if (sectionIndex !== -1) {
+        dispatch({ op: 'delete', path: `sections[${sectionIndex}]` });
+      }
       setDeletingId(null);
     }, 220);
   }, [dispatch]);
 
   const sensors = useDndSensors();
+
+  const moveSection = useCallback((fromIndex: number, toIndex: number) => {
+    const patches = keepTogetherReorderPatches(sections, fromIndex, toIndex, 'sections');
+    if (patches.length > 0) dispatch(patches, { origin: 'editor', label: 'section:reorder' });
+  }, [dispatch, sections]);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
@@ -138,14 +167,10 @@ export const SectionList = memo(function SectionList({ sections, onOpenPanel }: 
       const oldIndex = sections.findIndex((section) => section.id === active.id);
       const newIndex = sections.findIndex((section) => section.id === over.id);
       if (oldIndex !== -1 && newIndex !== -1) {
-        dispatch({
-          op: 'move',
-          from: `sections[${oldIndex}]`,
-          path: `sections[${newIndex}]`,
-        });
+        moveSection(oldIndex, newIndex);
       }
     }
-  }, [dispatch, sections]);
+  }, [moveSection, sections]);
 
   return (
     <DndContext
@@ -166,6 +191,7 @@ export const SectionList = memo(function SectionList({ sections, onOpenPanel }: 
             isDeleting={deletingId === section.id}
             onOpenPanel={onOpenPanel}
             onDelete={handleDeleteSection}
+            onMove={moveSection}
           />
         ))}
       </SortableContext>

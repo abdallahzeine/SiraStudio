@@ -1,4 +1,5 @@
 import type { Density } from '../../../shared/types';
+import { CurrentItemLinks } from '../../cv-editor/ItemLinks';
 
 interface ItemFramePrintProps {
   density: Density;
@@ -12,5 +13,5 @@ const densityClass: Record<Density, string> = {
 };
 
 export function ItemFramePrint({ density, children }: ItemFramePrintProps) {
-  return <div className={`avoid-break ${densityClass[density]}`}>{children}</div>;
+  return <div className={densityClass[density]}>{children}<CurrentItemLinks /></div>;
 }

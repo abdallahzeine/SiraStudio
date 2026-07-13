@@ -42,6 +42,19 @@ export function createCVStore(initial: CVDocument, options: CreateCVStoreOptions
     }, 300);
   };
 
+  const flushPersist = () => {
+    if (saveTimeout === null) return;
+
+    clearTimeout(saveTimeout);
+    saveTimeout = null;
+    saveCVData(state.document);
+  };
+
+  if (persist && typeof window !== 'undefined') {
+    window.addEventListener('pagehide', flushPersist);
+    import.meta.hot?.dispose(() => window.removeEventListener('pagehide', flushPersist));
+  }
+
   const notify = () => {
     listeners.forEach((listener) => listener(state.document));
   };

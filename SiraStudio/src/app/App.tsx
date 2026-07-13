@@ -1,16 +1,11 @@
 import { useState, useCallback, useEffect, lazy, Suspense } from "react";
-import type { CVData } from "../shared/types";
+import type { CVData, SocialLink } from "../shared/types";
+import type { Patch } from "./store";
 import { Toolbar } from "../features/cv-editor/components/Toolbar";
 import { SavesPanel } from "../features/saves/SavesPanel";
-import { useBackendDocumentAutosave } from "../features/saves/hooks/useBackendDocumentAutosave";
-import { AIAssistant } from "../features/assistant/AIAssistant";
 import { ConfirmModal } from "../shared/components/ConfirmModal";
 import { SplashScreen } from "../shared/components/SplashScreen";
 import { PrintTutorialModal } from "../shared/components/PrintTutorialModal.tsx";
-import {
-  hasSeenPrintTutorial,
-  markPrintTutorialSeen,
-} from "../shared/utils/printTutorial.ts";
 import { SidePanel } from "../shared/components/SidePanel";
 import { SectionLayoutContent } from "../features/cv-editor/components/SectionLayoutPanel";
 import { ErrorBoundary } from "../shared/components/ErrorBoundary";
@@ -19,10 +14,7 @@ import {
   saveSidePanelWidth,
 } from "../shared/utils/sidePanel";
 import { useMediaQuery } from "../shared/hooks/useMediaQuery";
-import {
-  createBlankCVData,
-  isValidCVData,
-} from "../features/saves/utils/snapshots";
+import { createBlankCVData } from "../features/saves/utils/snapshots";
 import {
   getPanelSubtitle,
   getPanelTitle,
@@ -31,6 +23,11 @@ import {
 } from "./panels";
 import { useUndoRedoShortcuts } from "./hooks/useUndoRedoShortcuts";
 import { useCVSelector, useDispatch, useHistory } from "./store";
+import {
+  PrintLayoutContext,
+  printBlockKey,
+  type PrintBlockKind,
+} from "../features/cv-editor/printLayoutContext";
 
 const EditorDocument = lazy(() =>
   import("../features/cv-editor/editor/EditorDocument").then((m) => ({
@@ -45,7 +42,6 @@ const PrintDocument = lazy(() =>
 
 export default function App() {
   const cv = useCVSelector((s) => s.data);
-  const revision = useCVSelector((s) => s.revision);
   const dispatch = useDispatch();
   const history = useHistory();
   const [showSplash, setShowSplash] = useState(true);
@@ -56,7 +52,9 @@ export default function App() {
     onConfirm: () => void;
   } | null>(null);
   const [showPrintTutorial, setShowPrintTutorial] = useState(false);
-  const [printAfterTutorial, setPrintAfterTutorial] = useState(false);
+  const [printLayoutMode, setPrintLayoutMode] = useState(false);
+  const [printSelection, setPrintSelection] = useState<Set<string>>(new Set());
+  const [printLayoutMessage, setPrintLayoutMessage] = useState("Select adjacent blocks, then keep them together.");
 
   useEffect(() => {
     void import("../features/cv-editor/editor/EditorDocument");
@@ -68,7 +66,6 @@ export default function App() {
   const closeConfirm = () => setConfirmModal(null);
 
   useUndoRedoShortcuts(dispatch, history);
-  useBackendDocumentAutosave(cv, revision);
 
   const handlePanelWidthChange = useCallback((w: number) => {
     setPanelWidth(w);
@@ -77,26 +74,140 @@ export default function App() {
 
   const handlePrint = () => {
     setPanel(null);
-    if (!hasSeenPrintTutorial()) {
-      setPrintAfterTutorial(true);
-      setShowPrintTutorial(true);
-      return;
-    }
+    setShowPrintTutorial(true);
+  };
+
+  const handleContinueToPrint = () => {
+    setShowPrintTutorial(false);
     setTimeout(() => window.print(), 300);
   };
 
-  const handleTutorialClose = () => {
-    markPrintTutorialSeen();
-    setShowPrintTutorial(false);
-    if (printAfterTutorial) {
-      setTimeout(() => window.print(), 300);
-    }
-    setPrintAfterTutorial(false);
+  const handleShowTutorial = () => {
+    setShowPrintTutorial(true);
   };
 
-  const handleShowTutorial = () => {
-    setPrintAfterTutorial(false);
-    setShowPrintTutorial(true);
+  const openPrintLayoutMode = () => {
+    setShowPrintTutorial(false);
+    setPrintLayoutMode(true);
+    setPrintSelection(new Set());
+    setPrintLayoutMessage("Select adjacent blocks, then keep them together.");
+  };
+
+  const protectedPrintBlocks = new Set<string>();
+  cv.sections.forEach((section) => {
+    if (section.keepTogetherGroup) protectedPrintBlocks.add(printBlockKey("section", section.id));
+    section.content.items.forEach((item) => {
+      if (item.keepTogetherGroup) protectedPrintBlocks.add(printBlockKey("item", item.id));
+    });
+  });
+
+  const togglePrintBlock = useCallback((kind: PrintBlockKind, id: string) => {
+    const key = printBlockKey(kind, id);
+    setPrintSelection((current) => {
+      const next = new Set([...current].filter((entry) => entry.startsWith(`${kind}:`)));
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+    setPrintLayoutMessage("Select adjacent blocks, then choose an action.");
+  }, []);
+
+  const togglePrintLayoutMode = () => {
+    setPrintLayoutMode((enabled) => !enabled);
+    setPrintSelection(new Set());
+    setPrintLayoutMessage("Select adjacent blocks, then keep them together.");
+    setPanel(null);
+  };
+
+  const selectedPrintTargets = () => {
+    const targets: { path: string; group?: string; sectionIndex: number; itemIndex?: number }[] = [];
+
+    printSelection.forEach((key) => {
+      if (key.startsWith("section:")) {
+        const id = key.slice("section:".length);
+        const sectionIndex = cv.sections.findIndex((section) => section.id === id);
+        if (sectionIndex >= 0) {
+          targets.push({
+            path: `sections[${sectionIndex}].keepTogetherGroup`,
+            group: cv.sections[sectionIndex].keepTogetherGroup,
+            sectionIndex,
+          });
+        }
+        return;
+      }
+
+      const id = key.slice("item:".length);
+      cv.sections.some((section, sectionIndex) => {
+        const itemIndex = section.content.items.findIndex((item) => item.id === id);
+        if (itemIndex < 0) return false;
+        targets.push({
+          path: `sections[${sectionIndex}].content.items[${itemIndex}].keepTogetherGroup`,
+          group: section.content.items[itemIndex].keepTogetherGroup,
+          sectionIndex,
+          itemIndex,
+        });
+        return true;
+      });
+    });
+
+    return targets;
+  };
+
+  const keepPrintSelectionTogether = () => {
+    const targets = selectedPrintTargets();
+    if (targets.length === 0) {
+      setPrintLayoutMessage("Select at least one section or entry first.");
+      return;
+    }
+
+    const isItemSelection = targets[0].itemIndex !== undefined;
+    if (targets.some((target) => (target.itemIndex !== undefined) !== isItemSelection)) {
+      setPrintLayoutMessage("Select sections or entries, not both at once.");
+      return;
+    }
+    if (isItemSelection && targets.some((target) => target.sectionIndex !== targets[0].sectionIndex)) {
+      setPrintLayoutMessage("Choose entries from the same section.");
+      return;
+    }
+
+    const positions = targets
+      .map((target) => isItemSelection ? target.itemIndex! : target.sectionIndex)
+      .sort((a, b) => a - b);
+    if (positions.some((position, index) => index > 0 && position !== positions[index - 1] + 1)) {
+      setPrintLayoutMessage("Choose adjacent blocks so they can stay together.");
+      return;
+    }
+
+    const group = crypto.randomUUID();
+    const result = dispatch(
+      targets.map<Patch>((target) => ({ op: "set", path: target.path, value: group })),
+      { origin: "editor", label: "print:keep-together" },
+    );
+    if (!result.success) {
+      setPrintLayoutMessage("The print setting could not be applied. Please try again.");
+      return;
+    }
+    setPrintSelection(new Set());
+    setPrintLayoutMessage(`${targets.length} block${targets.length === 1 ? "" : "s"} will stay together when printing.`);
+  };
+
+  const allowPrintSelectionToBreak = () => {
+    const targets = selectedPrintTargets().filter((target) => target.group !== undefined);
+    if (targets.length === 0) {
+      setPrintLayoutMessage("The selected blocks already allow page breaks.");
+      return;
+    }
+
+    const result = dispatch(
+      targets.map<Patch>((target) => ({ op: "delete", path: target.path })),
+      { origin: "editor", label: "print:allow-break" },
+    );
+    if (!result.success) {
+      setPrintLayoutMessage("The print setting could not be removed. Please try again.");
+      return;
+    }
+    setPrintSelection(new Set());
+    setPrintLayoutMessage("The selected blocks may now split across pages.");
   };
 
   const handleReset = () => {
@@ -130,28 +241,29 @@ export default function App() {
     });
   }, [closePanel, dispatch]);
 
-  const handleApplyAgentCV = useCallback(
-    (data: CVData) => {
-      if (!isValidCVData(data)) {
-        console.error("[agent] Ignored invalid CV payload", data);
-        return;
-      }
-
-      dispatch(
-        { op: "replace", path: "", value: data },
-        { origin: "agent", label: "agent:apply" },
-      );
-    },
-    [dispatch],
-  );
-
   const panelOpen = panel !== null;
   const effectiveWidth = panelOpen ? panelWidth : 0;
   const isMobile = useMediaQuery("(max-width: 767px)");
+  const mustRotate = useMediaQuery(
+    "screen and (max-width: 767px) and (orientation: portrait)",
+  );
   const toolbarOffsetX = panelOpen && !isMobile ? panelWidth / 2 : 0;
 
   return (
     <>
+      {mustRotate && (
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-slate-950 px-8 text-center text-white">
+          <div className="max-w-sm">
+            <div className="mb-6 text-6xl" aria-hidden="true">
+              ↻
+            </div>
+            <h1 className="text-2xl font-semibold">Rotate your phone</h1>
+            <p className="mt-3 text-sm leading-6 text-slate-300">
+              Turn your phone sideways to edit and work with your CV.
+            </p>
+          </div>
+        </div>
+      )}
       {showSplash && <SplashScreen onDone={() => setShowSplash(false)} />}
       <div
         className="transition-[margin-right] duration-300 ease-in-out"
@@ -161,14 +273,26 @@ export default function App() {
           onReset={handleReset}
           onPrint={handlePrint}
           onOpenSaves={() => setPanel({ type: "saves" })}
-          onOpenAI={() => setPanel({ type: "agent" })}
           panelOffsetX={toolbarOffsetX}
+          printLayoutMode={printLayoutMode}
+          printSelectionCount={printSelection.size}
+          printLayoutMessage={printLayoutMessage}
+          onTogglePrintLayoutMode={togglePrintLayoutMode}
+          onKeepTogether={keepPrintSelectionTogether}
+          onAllowBreak={allowPrintSelectionToBreak}
         />
         {!showSplash && (
           <ErrorBoundary>
             <Suspense fallback={null}>
               <div id="editor-root">
-                <EditorDocument onOpenPanel={openPanel} />
+                <PrintLayoutContext.Provider value={{
+                  enabled: printLayoutMode,
+                  selected: printSelection,
+                  protectedBlocks: protectedPrintBlocks,
+                  toggle: togglePrintBlock,
+                }}>
+                  <EditorDocument onOpenPanel={openPanel} />
+                </PrintLayoutContext.Provider>
               </div>
               <div id="print-root">
                 <PrintDocument doc={cv} />
@@ -186,9 +310,12 @@ export default function App() {
             onCancel={closeConfirm}
           />
         )}
-        {showPrintTutorial && (
-          <PrintTutorialModal onClose={handleTutorialClose} />
-        )}
+        <PrintTutorialModal
+          open={showPrintTutorial}
+          onClose={() => setShowPrintTutorial(false)}
+          onPrint={handleContinueToPrint}
+          onEditPageBreaks={openPrintLayoutMode}
+        />
         <SidePanel
           open={panelOpen}
           onClose={closePanel}
@@ -196,13 +323,6 @@ export default function App() {
           onWidthChange={handlePanelWidthChange}
           title={getPanelTitle(panel)}
           subtitle={getPanelSubtitle(panel, cv)}
-          hideHeader={panel?.type === "agent"}
-          bodyClassName={
-            panel?.type === "agent"
-              ? "flex min-h-0 flex-col overflow-hidden !px-0 !py-0"
-              : undefined
-          }
-          bodyScrollable={panel?.type !== "agent"}
         >
           {panel?.type === "saves" && (
             <SavesPanel
@@ -210,14 +330,6 @@ export default function App() {
               onLoadSnapshot={handleLoadSnapshot}
               onLoadBlank={handleLoadBlank}
               onShowTutorial={handleShowTutorial}
-            />
-          )}
-          {panel?.type === "agent" && (
-            <AIAssistant
-              cv={cv}
-              revision={revision}
-              onApplyCV={handleApplyAgentCV}
-              onClose={closePanel}
             />
           )}
           {panel?.type === "layout-settings" &&
@@ -228,6 +340,11 @@ export default function App() {
               );
               if (!panelSection) return null;
               const panelSIdx = cv.sections.indexOf(panelSection);
+              const itemLinksPath = (itemIndex: number) =>
+                `sections[${panelSIdx}].content.items[${itemIndex}].links`;
+              const itemLinks = (itemIndex: number): SocialLink[] =>
+                panelSection.content.items[itemIndex]?.links ?? [];
+
               return (
                 <SectionLayoutContent
                   section={panelSection}
@@ -238,6 +355,48 @@ export default function App() {
                       value: layout,
                     })
                   }
+                  onAddItemLink={(itemIndex, link) => {
+                    const path = itemLinksPath(itemIndex);
+                    if (!panelSection.content.items[itemIndex]?.links) {
+                      dispatch({ op: "set", path, value: [link] });
+                      return;
+                    }
+                    dispatch({
+                      op: "insert",
+                      path: `${path}[-1]`,
+                      value: link,
+                    });
+                  }}
+                  onUpdateItemLink={(itemIndex, linkIndex, link) =>
+                    dispatch({
+                      op: "replace",
+                      path: `${itemLinksPath(itemIndex)}[${linkIndex}]`,
+                      value: link,
+                    })
+                  }
+                  onDeleteItemLink={(itemIndex, linkIndex) =>
+                    dispatch({
+                      op: "delete",
+                      path: `${itemLinksPath(itemIndex)}[${linkIndex}]`,
+                    })
+                  }
+                  onReorderItemLinks={(itemIndex, fromIndex, toIndex) => {
+                    if (fromIndex === toIndex) return;
+                    const links = itemLinks(itemIndex);
+                    if (
+                      fromIndex < 0 ||
+                      toIndex < 0 ||
+                      fromIndex >= links.length ||
+                      toIndex >= links.length
+                    ) {
+                      return;
+                    }
+                    dispatch({
+                      op: "move",
+                      from: `${itemLinksPath(itemIndex)}[${fromIndex}]`,
+                      path: `${itemLinksPath(itemIndex)}[${toIndex}]`,
+                    });
+                  }}
                 />
               );
             })()}

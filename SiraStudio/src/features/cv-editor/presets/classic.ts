@@ -39,7 +39,7 @@ export const classicLayouts: Record<SectionType, SectionLayout> = {
     dateSlot: 'hidden',
     iconStyle: 'bullet',
     separator: 'none',
-    density: 'relaxed',
+    density: 'compact',
     columns: 1,
   },
   awards: {

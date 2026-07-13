@@ -1,7 +1,7 @@
 import { sectionRegistry } from '../features/cv-editor/sections/registry';
 import type { CVData } from '../shared/types';
 
-export type PanelType = 'layout-settings' | 'saves' | 'agent';
+export type PanelType = 'layout-settings' | 'saves';
 
 export interface PanelState {
   type: PanelType;
@@ -11,7 +11,6 @@ export interface PanelState {
 export function getPanelTitle(panel: PanelState | null): string {
   if (panel?.type === 'layout-settings') return 'Layout Settings';
   if (panel?.type === 'saves') return 'Saved CVs';
-  if (panel?.type === 'agent') return 'AI Assistant';
   return '';
 }
 

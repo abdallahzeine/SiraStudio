@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { X } from "lucide-react";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useSidePanelResize } from "../hooks/useSidePanelResize";
@@ -52,7 +53,7 @@ export function SidePanel({
           onMouseDown={handleResizeStart}
           className="hidden md:block w-1 shrink-0 cursor-col-resize group relative"
         >
-          <div className="absolute inset-y-0 -left-1 right-0 group-hover:bg-violet-200/60 group-active:bg-violet-300/60 transition-colors" />
+          <div className="absolute inset-y-0 -left-1 right-0 group-hover:bg-blue-200/60 group-active:bg-blue-300/60 transition-colors" />
         </div>
 
         <div className="flex-1 flex flex-col bg-white border-l border-gray-200 overflow-hidden">
@@ -68,7 +69,7 @@ export function SidePanel({
                 onClick={onClose}
                 className="w-8 h-8 flex items-center justify-center rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
               >
-                ✕
+                <X size={16} />
               </button>
             </div>
           )}

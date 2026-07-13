@@ -1,6 +1,7 @@
 import type { SectionDef } from './registry';
 import { useState } from 'react';
-import type { CustomFieldDef, CVItem, SectionLayout } from '../../../shared/types';
+import { X } from 'lucide-react';
+import type { BulletEntry, CustomFieldDef, CVItem, SectionLayout } from '../../../shared/types';
 import { classicLayouts, professionalLayouts } from '../presets';
 import { CVTextEditor } from '../editor/CVTextEditor';
 import { BulletList } from '../layouts/BulletList';
@@ -11,7 +12,7 @@ import { HeadingBlockPrint } from '../../print/layouts/HeadingBlockPrint';
 import { ItemFramePrint } from '../../print/layouts/ItemFramePrint';
 import { PrintRichText } from '../../print/PrintRichText';
 import { uid } from '../../../shared/utils/helpers';
-import { builtInSectionSchemas } from '../../../shared/utils/cvContent';
+import { builtInSectionSchemas, fieldBulletArray } from '../../../shared/utils/cvContent';
 import { useDispatch } from '../../../app/store';
 import { customSectionPresetFor } from './customLayout';
 
@@ -28,20 +29,18 @@ function TagInput({ tags, path, label, placeholder }: { tags: string[]; path: st
   };
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 py-1.5 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-100">
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2 py-1.5 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100">
       {tags.map((tag, index) => (
-        <span key={`${tag}-${index}`} className="inline-flex items-center gap-1 rounded-md bg-violet-100 px-2 py-0.5 text-xs text-violet-800">
+        <span key={`${tag}-${index}`} className="inline-flex items-center gap-1 rounded-md bg-blue-100 px-2 py-0.5 text-xs text-blue-800">
           {tag}
           <button
             type="button"
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => dispatch({ op: 'replace', path, value: tags.filter((_, tagIndex) => tagIndex !== index) })}
-            className="rounded text-violet-500 hover:text-violet-800 focus:outline-none focus:ring-1 focus:ring-violet-400"
+            className="rounded text-[#0078D7] hover:text-blue-800 focus:outline-none focus:ring-1 focus:ring-blue-400"
             aria-label={`Remove ${tag}`}
           >
-            <svg className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24" aria-hidden="true">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-            </svg>
+            <X size={12} />
           </button>
         </span>
       ))}
@@ -77,9 +76,13 @@ function fieldValue(item: CVItem, field: CustomFieldDef): string {
   return typeof value === 'string' ? value : '';
 }
 
-function fieldValues(item: CVItem, field: CustomFieldDef): string[] {
+function fieldStringValues(item: CVItem, field: CustomFieldDef): string[] {
   const value = item.fields[field.key];
-  return Array.isArray(value) ? value : [];
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string') ? value : [];
+}
+
+function fieldBullets(item: CVItem, field: CustomFieldDef): BulletEntry[] {
+  return fieldBulletArray(item, field.key);
 }
 
 function fieldPlaceholder(field: CustomFieldDef): string {
@@ -124,7 +127,7 @@ function renderPresetFields(
           subtitleClassName="text-gray-700 text-sm"
         />
         <BulletList
-          bullets={fieldValues(item, achievements)}
+          bullets={fieldBullets(item, achievements)}
           bulletsPath={`${path}.fields.${achievements.key}`}
           iconStyle={layout.iconStyle}
           bulletPlaceholder={fieldPlaceholder(achievements)}
@@ -150,7 +153,7 @@ function renderPresetFields(
           titleClassName="text-base font-semibold"
         />
         <BulletList
-          bullets={fieldValues(item, details)}
+          bullets={fieldBullets(item, details)}
           bulletsPath={`${path}.fields.${details.key}`}
           iconStyle={layout.iconStyle}
           bulletPlaceholder={fieldPlaceholder(details)}
@@ -197,7 +200,7 @@ function renderCustomFields(
         const val = values[field.key];
 
         if (field.kind === 'bullets') {
-          const bullets = Array.isArray(val) ? val : [];
+          const bullets = fieldBullets(item, field);
           return (
             <div key={field.key}>
               <BulletList
@@ -211,7 +214,7 @@ function renderCustomFields(
         }
 
         if (field.kind === 'tags') {
-          const tags = Array.isArray(val) ? val : [];
+          const tags = fieldStringValues(item, field);
           return (
             <div key={field.key}>
               <TagInput
@@ -282,7 +285,7 @@ function renderPresetFieldsPrint(
           titleClassName="text-base font-semibold"
           subtitleClassName="text-gray-700 text-sm"
         />
-        <BulletListPrint bullets={fieldValues(item, achievements)} iconStyle={layout.iconStyle} />
+        <BulletListPrint bullets={fieldBullets(item, achievements)} iconStyle={layout.iconStyle} />
       </>
     );
   }
@@ -299,7 +302,7 @@ function renderPresetFieldsPrint(
           dateSlot={layout.dateSlot}
           titleClassName="text-base font-semibold"
         />
-        <BulletListPrint bullets={fieldValues(item, details)} iconStyle={layout.iconStyle} />
+        <BulletListPrint bullets={fieldBullets(item, details)} iconStyle={layout.iconStyle} />
       </>
     );
   }
@@ -337,7 +340,7 @@ function renderCustomFieldsPrint(
         const value = values[field.key];
 
         if (field.kind === 'bullets') {
-          const bullets = Array.isArray(value) ? value : [];
+          const bullets = fieldBullets(item, field);
           return (
             <div key={field.key}>
               <BulletListPrint bullets={bullets} iconStyle={layout.iconStyle} />
@@ -357,7 +360,7 @@ function renderCustomFieldsPrint(
         }
 
         if (field.kind === 'tags') {
-          const pairs = Array.isArray(value) ? value : [];
+          const pairs = fieldStringValues(item, field);
           return (
             <span key={field.key}>{pairs.join(', ')}</span>
           );

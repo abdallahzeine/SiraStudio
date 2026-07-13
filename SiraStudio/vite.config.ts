@@ -10,11 +10,6 @@ export default defineConfig({
     react(),
     babel({ presets: [reactCompilerPreset()] })
   ],
-  server: {
-    proxy: {
-      '/api': 'http://127.0.0.1:8000',
-    },
-  },
   build: {
     rollupOptions: {
       output: {
@@ -27,9 +22,6 @@ export default defineConfig({
           }
           if (id.includes('node_modules/@tiptap')) {
             return 'vendor-tiptap';
-          }
-          if (id.includes('node_modules/@vercel/analytics')) {
-            return 'vendor-analytics';
           }
         },
       },
