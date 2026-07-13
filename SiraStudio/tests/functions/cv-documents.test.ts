@@ -63,6 +63,13 @@ describe('CV document API helpers', () => {
     expect(cvDocumentFromSavedResponse(response)).toBeNull();
   });
 
+  it('rejects unknown backend sections instead of normalizing them away', () => {
+    const cv = structuredClone(initialCVData);
+    cv.sections.push({ ...cv.sections[0]!, id: 'spacer', type: 'spacer' as never });
+
+    expect(cvDocumentFromSavedResponse(makeDocument({ cv }))).toBeNull();
+  });
+
   it('uses PUT when updating saved documents by default', async () => {
     const response = makeDocument({ revision: 2 });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -83,8 +90,24 @@ describe('CV document API helpers', () => {
     expect(isRevisionConflictError(new CVDocumentAPIError(500, 'Server Error'))).toBe(false);
   });
 
-  it('uses the CV header name as the saved document title', () => {
+  it('derives a bounded plain-text title without changing the CV name', () => {
+    const names = [
+      `<p><strong>${'a'.repeat(199)}</strong></p>`,
+      `<p>${'b'.repeat(200)}</p>`,
+      `<p>${'c'.repeat(201)}</p>`,
+    ];
+
+    for (const name of names) {
+      const cv = { ...initialCVData, header: { ...initialCVData.header, name } };
+
+      expect(titleForCVDocument(cv)).toBe(name.match(/[abc]+/)?.[0].slice(0, 200));
+      expect(cv.header.name).toBe(name);
+    }
+
     expect(titleForCVDocument(initialCVData)).toBe('Abdallah Zeine Elabidine');
-    expect(titleForCVDocument({ ...initialCVData, header: { ...initialCVData.header, name: '  ' } })).toBe('My CV');
+    expect(titleForCVDocument({
+      ...initialCVData,
+      header: { ...initialCVData.header, name: '<p>  </p><script>hidden</script>' },
+    })).toBe('My CV');
   });
 });

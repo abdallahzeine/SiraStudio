@@ -16,6 +16,7 @@ export function SavesPanel({
 }: SavesPanelProps) {
   const {
     snapshots,
+    rejectedSnapshotCount,
     effectiveSaveName,
     confirmDeleteId,
     dateFormatter,
@@ -50,11 +51,11 @@ export function SavesPanel({
             value={effectiveSaveName}
             onChange={(event) => handleSaveNameChange(event.target.value)}
             placeholder="Snapshot name"
-            className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#0078D7] focus:border-[#0078D7]"
           />
           <button
             onClick={handleSave}
-            className="shrink-0 px-3 py-2 text-sm font-medium rounded-lg bg-violet-600 text-white hover:bg-violet-700 transition-colors"
+            className="shrink-0 px-3 py-2 text-sm font-medium rounded-lg bg-[#0078D7] text-white hover:bg-blue-700 transition-colors"
           >
             Save
           </button>
@@ -62,7 +63,7 @@ export function SavesPanel({
         {onShowTutorial && (
           <button
             onClick={onShowTutorial}
-            className="text-xs text-violet-600 hover:text-violet-700 underline underline-offset-2"
+            className="text-xs text-[#0078D7] hover:text-blue-700 underline underline-offset-2"
           >
             Want to see how to save as PDF?
           </button>
@@ -73,6 +74,11 @@ export function SavesPanel({
 
       <section className="space-y-3">
         <h3 className="text-sm font-semibold text-gray-800">Saved Snapshots</h3>
+        {rejectedSnapshotCount > 0 && (
+          <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            {rejectedSnapshotCount} saved {rejectedSnapshotCount === 1 ? "snapshot was" : "snapshots were"} unreadable and left unchanged. Your other snapshots are still available.
+          </p>
+        )}
         {snapshots.length === 0 ? (
           <p className="text-sm text-gray-500">No saved snapshots yet.</p>
         ) : (

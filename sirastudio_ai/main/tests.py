@@ -10,11 +10,14 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from threading import Event
 from pathlib import Path
 from typing import Any, Literal, TypeAlias, TypedDict, override
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import Client, TestCase, override_settings
+from langchain.messages import AIMessage
 
 from . import jobs
+from .agent import core
+from .agent.core import AgentCancellationError
 from .cv_schema import CVData, SCAFFOLD_CV_FIXTURE, TemplateId, parse_cv
 
 
@@ -47,6 +50,328 @@ def _cv_fixture(
 
 def _cv_payload(cv: CVData) -> dict[str, object]:
     return cv.model_dump(by_alias=True)
+
+
+class _SequenceModel:
+    def __init__(self, responses: list[object]):
+        self.responses = iter(responses)
+        self.calls: list[tuple[object, object]] = []
+
+    def invoke(self, messages: object, config: object = None) -> object:
+        self.calls.append((messages, config))
+        return next(self.responses)
+
+
+class _BlockingFirstModel(_SequenceModel):
+    def __init__(self, responses: list[object], started: Event, release: Event):
+        super().__init__(responses)
+        self.started = started
+        self.release = release
+
+    def invoke(self, messages: object, config: object = None) -> object:
+        if not self.calls:
+            self.started.set()
+            self.release.wait(timeout=2)
+        return super().invoke(messages, config)
+
+
+def _tool_call(name: str, args: dict[str, object], call_id: str) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[{"name": name, "args": args, "id": call_id, "type": "tool_call"}],
+    )
+
+
+class AgentGraphFlowTests(TestCase):
+    def setUp(self) -> None:
+        self.saved = {
+            name: getattr(core, name)
+            for name in (
+                "_graph",
+                "_base_model",
+                "_model",
+                "_review_model",
+            )
+        }
+        core._graph = None
+
+    def tearDown(self) -> None:
+        for name, value in self.saved.items():
+            setattr(core, name, value)
+
+    def test_model_binding_disables_parallel_tool_calls(self) -> None:
+        base_model = Mock()
+        bound_model = object()
+        base_model.bind_tools.return_value = bound_model
+        core._base_model = base_model
+        core._model = None
+
+        self.assertIs(core._get_model(), bound_model)
+        base_model.bind_tools.assert_called_once_with(
+            core.AGENT_TOOLS, parallel_tool_calls=False
+        )
+
+    def test_live_status_starts_while_model_is_still_working(self) -> None:
+        started = Event()
+        release = Event()
+        events: list[dict[str, object]] = []
+        core._model = _BlockingFirstModel(
+            [
+                _tool_call("read_cv", {}, "read"),
+                AIMessage(content="No CV change was requested."),
+            ],
+            started,
+            release,
+        )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                core.run_agent,
+                _cv_fixture(),
+                "What is currently in my CV?",
+                "graph-live-status",
+                None,
+                events.append,
+            )
+            self.assertTrue(started.wait(timeout=1))
+            try:
+                self.assertTrue(
+                    any(
+                        event.get("name") == "plan_changes"
+                        and event.get("status") == "running"
+                        for event in events
+                    )
+                )
+            finally:
+                release.set()
+            self.assertIsNone(future.result(timeout=2)["error_code"])
+
+    def test_read_is_mandatory_before_sequential_edits(self) -> None:
+        summary_path = "sections[0].content.items[0].fields.body"
+        edit_args = {
+            "operations": [{"op": "set", "path": summary_path, "value": "Updated."}]
+        }
+        tool_events: list[dict[str, str]] = []
+        core._model = _SequenceModel(
+            [
+                _tool_call("apply_cv_edits", edit_args, "blocked-edit"),
+                _tool_call("read_cv", {}, "read"),
+                _tool_call("apply_cv_edits", edit_args, "edit"),
+                AIMessage(content="Updated the summary."),
+            ]
+        )
+        core._review_model = _SequenceModel([{"complete": True, "missing": []}])
+
+        result = core.run_agent(
+            _cv_fixture(), "Update my summary", "graph-mandatory-read", on_tool_event=tool_events.append
+        )
+
+        self.assertIsNone(result["error_code"])
+        self.assertEqual(result["cv"]["sections"][0]["content"]["items"][0]["fields"]["body"], "Updated.")
+        self.assertEqual(
+            [event["status"] for event in tool_events if event["id"] == "blocked-edit"],
+            ["running", "failed"],
+        )
+        self.assertEqual(result["metadata"]["successful_edits"], 1)
+
+    def test_multi_part_edit_uses_sequential_calls_then_reviews_current_cv(self) -> None:
+        summary_path = "sections[0].content.items[0].fields.body"
+        summary_edit = {
+            "operations": [
+                {
+                    "op": "set",
+                    "path": summary_path,
+                    "value": "Builds reliable analytical engines and developer tools.",
+                }
+            ]
+        }
+        location_edit = {
+            "operations": [
+                {
+                    "op": "set",
+                    "path": "header.location",
+                    "value": "Amman, Jordan",
+                },
+            ]
+        }
+        tool_events: list[dict[str, str]] = []
+        core._model = _SequenceModel(
+            [
+                _tool_call("read_cv", {}, "read"),
+                _tool_call("apply_cv_edits", summary_edit, "summary-edit"),
+                _tool_call("apply_cv_edits", location_edit, "location-edit"),
+                AIMessage(content="Updated the summary and location."),
+            ]
+        )
+        core._review_model = _SequenceModel(
+            [
+                {
+                    "complete": True,
+                    "missing": [],
+                }
+            ]
+        )
+
+        result = core.run_agent(
+            _cv_fixture(),
+            "Improve my summary and set my location to Amman, Jordan",
+            "graph-sequential-edits",
+            on_tool_event=tool_events.append,
+        )
+
+        self.assertIsNone(result["error_code"])
+        self.assertEqual(result["reply"], "Updated the summary and location.")
+        self.assertTrue(result["metadata"]["review_complete"])
+        self.assertEqual(result["metadata"]["successful_edits"], 2)
+        self.assertEqual(len(core._review_model.calls), 1)
+        self.assertEqual(
+            [(event["id"], event["status"]) for event in tool_events if event["name"] == "apply_cv_edits"],
+            [
+                ("summary-edit", "running"),
+                ("summary-edit", "completed"),
+                ("location-edit", "running"),
+                ("location-edit", "completed"),
+            ],
+        )
+        self.assertEqual(
+            result["cv"]["sections"][0]["content"]["items"][0]["fields"]["body"],
+            "Builds reliable analytical engines and developer tools.",
+        )
+        self.assertEqual(result["cv"]["header"]["location"], "Amman, Jordan")
+        review_messages, _ = core._review_model.calls[0]
+        review_input = review_messages[-1].content
+        self.assertIn('"request": "Improve my summary and set my location to Amman, Jordan"', review_input)
+        self.assertIn('"current_cv":', review_input)
+        self.assertIn("Builds reliable analytical engines", review_input)
+        self.assertIn("Amman, Jordan", review_input)
+
+    def test_failed_direct_edit_is_not_reviewed(self) -> None:
+        invalid_edit = {
+            "operations": [
+                {"op": "set", "path": "sections[99].title", "value": "Missing"}
+            ]
+        }
+        core._model = _SequenceModel(
+            [
+                _tool_call("read_cv", {}, "read"),
+                _tool_call("apply_cv_edits", invalid_edit, "bad-edit-1"),
+                _tool_call("apply_cv_edits", invalid_edit, "bad-edit-2"),
+            ]
+        )
+        core._review_model = _SequenceModel([])
+        original = _cv_fixture()
+
+        result = core.run_agent(original, "Change a missing section", "graph-edit-failed")
+
+        self.assertEqual(result["error_code"], "AGENT_EDIT_FAILED")
+        self.assertEqual(parse_cv(result["cv"]), original)
+        self.assertEqual(len(core._review_model.calls), 0)
+
+    def test_incomplete_review_returns_missing_work_to_agent_once(self) -> None:
+        first_summary = "Builds reliable tools."
+        completed_summary = "Builds reliable analytical engines and developer tools."
+        core._model = _SequenceModel(
+            [
+                _tool_call("read_cv", {}, "read"),
+                _tool_call(
+                    "apply_cv_edits",
+                    {
+                        "operations": [
+                            {
+                                "op": "set",
+                                "path": "sections[0].content.items[0].fields.body",
+                                "value": first_summary,
+                            }
+                        ]
+                    },
+                    "edit",
+                ),
+                AIMessage(content="Updated the summary."),
+                _tool_call(
+                    "apply_cv_edits",
+                    {
+                        "operations": [
+                            {
+                                "op": "set",
+                                "path": "sections[0].content.items[0].fields.body",
+                                "value": completed_summary,
+                            }
+                        ]
+                    },
+                    "correction",
+                ),
+                AIMessage(content="Completed the requested summary."),
+            ]
+        )
+        core._review_model = _SequenceModel(
+            [
+                {
+                    "complete": False,
+                    "missing": ["The summary still needs to mention analytical engines."],
+                },
+            ]
+        )
+
+        result = core.run_agent(
+            _cv_fixture(), "Improve my summary", "graph-review-audit"
+        )
+
+        self.assertIsNone(result["error_code"])
+        self.assertNotIn("workflow_failed_reason", result["metadata"])
+        self.assertFalse(result["metadata"]["review_complete"])
+        self.assertEqual(result["metadata"]["review_correction_count"], 1)
+        self.assertEqual(len(core._model.calls), 5)
+        self.assertEqual(len(core._review_model.calls), 1)
+        self.assertEqual(
+            result["cv"]["sections"][0]["content"]["items"][0]["fields"]["body"],
+            completed_summary,
+        )
+        correction_messages, _ = core._model.calls[3]
+        self.assertIn(
+            "The summary still needs to mention analytical engines.",
+            correction_messages[-1].content,
+        )
+
+    def test_incomplete_review_without_correction_keeps_completed_edits(self) -> None:
+        changed_summary = "Builds reliable tools."
+        core._model = _SequenceModel(
+            [
+                _tool_call("read_cv", {}, "read"),
+                _tool_call(
+                    "apply_cv_edits",
+                    {
+                        "operations": [
+                            {
+                                "op": "set",
+                                "path": "sections[0].content.items[0].fields.body",
+                                "value": changed_summary,
+                            }
+                        ]
+                    },
+                    "edit",
+                ),
+                AIMessage(content="Updated the summary."),
+                AIMessage(content="The requested details are now included."),
+            ]
+        )
+        core._review_model = _SequenceModel(
+            [
+                {"complete": False, "missing": ["Mention analytical engines."]},
+            ]
+        )
+        original = _cv_fixture()
+
+        result = core.run_agent(original, "Improve my summary", "graph-review-failed")
+
+        self.assertIsNone(result["error_code"])
+        self.assertNotEqual(parse_cv(result["cv"]), original)
+        self.assertEqual(
+            result["cv"]["sections"][0]["content"]["items"][0]["fields"]["body"],
+            changed_summary,
+        )
+        self.assertEqual(result["metadata"]["review_correction_count"], 1)
+        self.assertEqual(len(core._review_model.calls), 1)
+        self.assertEqual(result["reply"], "The requested details are now included.")
 
 
 class CVDocumentApiTests(TestCase):
@@ -175,10 +500,8 @@ class AgentBackendSmokeTests(TestCase):
             message: str,
             thread_id: str,
             run_id: str | None = None,
-            user_id: str | None = None,
-            checkpoint_id: str | None = None,
-            input_revision: int | None = None,
             on_tool_event: ToolEventHandler | None = None,
+            should_cancel: Callable[[], bool] | None = None,
         ) -> dict[str, object]:
             if on_tool_event:
                 on_tool_event({"id": "tool-1", "name": "read_cv", "status": "completed"})
@@ -214,7 +537,6 @@ class AgentBackendSmokeTests(TestCase):
                         "cv": _cv_payload(request_cv),
                         "message": "Read my CV",
                         "thread_id": thread_id,
-                        "revision": 1,
                     }
                 ),
                 content_type="application/json",
@@ -321,6 +643,314 @@ class AgentBackendSmokeTests(TestCase):
             jobs._EXECUTOR = original_executor
             jobs._MAX_PENDING_JOBS = original_max_pending
             jobs._MAX_RUNNING_JOBS = original_max_running
+
+    def test_queued_agent_job_can_be_cancelled_before_agent_runs(self) -> None:
+        worker_occupied = Event()
+        release_worker = Event()
+        agent_called = Event()
+        original_executor = jobs._EXECUTOR
+        test_executor = ThreadPoolExecutor(max_workers=1)
+
+        def occupy_worker() -> None:
+            worker_occupied.set()
+            self.assertTrue(release_worker.wait(timeout=2))
+
+        def fake_run_agent(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            agent_called.set()
+            raise AssertionError("A cancelled queued job must not run the agent")
+
+        test_executor.submit(occupy_worker)
+        self.assertTrue(worker_occupied.wait(timeout=1))
+        jobs._EXECUTOR = test_executor
+
+        try:
+            with patch("main.jobs.run_agent", fake_run_agent):
+                edit = self.client.post(
+                    "/api/agent/edit",
+                    data=json.dumps(
+                        {
+                            "cv": _cv_payload(_cv_fixture()),
+                            "message": "Cancel while queued",
+                            "thread_id": "queued-cancel-thread",
+                        }
+                    ),
+                    content_type="application/json",
+                )
+                self.assertEqual(edit.status_code, 200)
+                job_id = edit.json()["job_id"]
+                self.assertEqual(jobs.job_status_payload(job_id)["status"], "queued")
+
+                cancelled = self.client.post(f"/api/agent/jobs/{job_id}/cancel")
+                self.assertEqual(cancelled.status_code, 200)
+                self.assertEqual(cancelled.json()["status"], "cancelled")
+                self.assertEqual(cancelled.json()["reply"], "Stopped.")
+                self.assertIsNone(cancelled.json()["cv"])
+
+                repeated = self.client.post(f"/api/agent/jobs/{job_id}/cancel")
+                self.assertEqual(repeated.status_code, 200)
+                self.assertEqual(repeated.json(), cancelled.json())
+
+                release_worker.set()
+                time.sleep(0.1)
+
+            self.assertFalse(agent_called.is_set())
+            self.assertEqual(jobs.job_status_payload(job_id)["status"], "cancelled")
+            cancelled_events = [
+                event for event in jobs.list_job_events(job_id) if event["type"] == "cancelled"
+            ]
+            cancelled_messages = [
+                message
+                for message in jobs.list_thread_messages("queued-cancel-thread")
+                if message["job_id"] == job_id and message["status"] == "cancelled"
+            ]
+            self.assertEqual(len(cancelled_events), 1)
+            self.assertEqual(len(cancelled_messages), 1)
+            self.assertEqual(cancelled_messages[0]["content"], "Stopped.")
+            self.assertFalse(
+                any(
+                    message["job_id"] == job_id
+                    and message["role"] == "assistant"
+                    and message["status"] == "completed"
+                    for message in jobs.list_thread_messages("queued-cancel-thread")
+                )
+            )
+        finally:
+            release_worker.set()
+            test_executor.shutdown(wait=True)
+            jobs._EXECUTOR = original_executor
+
+    def test_running_agent_job_cancellation_wins_over_late_result(self) -> None:
+        agent_started = Event()
+        release_agent = Event()
+        agent_returned = Event()
+
+        def fake_run_agent(
+            cv: CVData,
+            message: str,
+            thread_id: str,
+            run_id: str | None = None,
+            should_cancel: Callable[[], bool] | None = None,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            agent_started.set()
+            self.assertTrue(release_agent.wait(timeout=2))
+            self.assertIsNotNone(should_cancel)
+            self.assertTrue(should_cancel())
+            changed_cv = _cv_payload(cv)
+            changed_cv["header"]["name"] = "Must not be applied"
+            agent_returned.set()
+            return {
+                "cv": changed_cv,
+                "reply": "Late completion must be discarded.",
+                "run_id": run_id or "late-run",
+                "metadata": {},
+            }
+
+        with patch("main.jobs.run_agent", fake_run_agent):
+            edit = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": _cv_payload(_cv_fixture()),
+                        "message": "Cancel while running",
+                        "thread_id": "running-cancel-thread",
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(edit.status_code, 200)
+            job_id = edit.json()["job_id"]
+            self.assertTrue(agent_started.wait(timeout=1))
+
+            cancelled = self.client.post(f"/api/agent/jobs/{job_id}/cancel")
+            self.assertEqual(cancelled.status_code, 200)
+            self.assertEqual(cancelled.json()["status"], "cancelled")
+            self.assertEqual(cancelled.json()["reply"], "Stopped.")
+            self.assertIsNone(cancelled.json()["cv"])
+
+            release_agent.set()
+            self.assertTrue(agent_returned.wait(timeout=1))
+            time.sleep(0.1)
+
+        final_status = self.client.get(f"/api/agent/jobs/{job_id}").json()
+        self.assertEqual(final_status["status"], "cancelled")
+        self.assertEqual(final_status["reply"], "Stopped.")
+        self.assertIsNone(final_status["cv"])
+        self.assertNotIn("Late completion", json.dumps(final_status))
+        cancelled_events = [
+            event for event in jobs.list_job_events(job_id) if event["type"] == "cancelled"
+        ]
+        cancelled_messages = [
+            message
+            for message in jobs.list_thread_messages("running-cancel-thread")
+            if message["job_id"] == job_id and message["status"] == "cancelled"
+        ]
+        self.assertEqual(len(cancelled_events), 1)
+        self.assertEqual(len(cancelled_messages), 1)
+        self.assertFalse(
+            any(event["type"] == "completed" for event in jobs.list_job_events(job_id))
+        )
+        self.assertFalse(
+            any(
+                message["job_id"] == job_id
+                and message["role"] == "assistant"
+                and message["status"] == "completed"
+                for message in jobs.list_thread_messages("running-cancel-thread")
+            )
+        )
+
+    def test_cooperative_agent_cancellation_error_maps_to_cancelled(self) -> None:
+        def fake_run_agent(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise AgentCancellationError()
+
+        with patch("main.jobs.run_agent", fake_run_agent):
+            edit = self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": _cv_payload(_cv_fixture()),
+                        "message": "Cooperative cancel",
+                        "thread_id": "coop-cancel-thread",
+                    }
+                ),
+                content_type="application/json",
+            )
+            self.assertEqual(edit.status_code, 200)
+            job_id = edit.json()["job_id"]
+            status = self._wait_for_job(job_id)
+
+        self.assertEqual(status["status"], "cancelled")
+        self.assertEqual(status["reply"], "Stopped.")
+        self.assertIsNone(status["cv"])
+        self.assertIsNone(status["error"])
+        self.assertIsNone(status["error_code"])
+        cancelled_events = [
+            event for event in jobs.list_job_events(job_id) if event["type"] == "cancelled"
+        ]
+        self.assertEqual(len(cancelled_events), 1)
+        self.assertFalse(any(event["type"] == "failed" for event in jobs.list_job_events(job_id)))
+
+    def test_cancelled_inflight_job_still_occupies_capacity(self) -> None:
+        agent_started = Event()
+        release_agent = Event()
+        original_executor = jobs._EXECUTOR
+        original_max_pending = jobs._MAX_PENDING_JOBS
+        original_max_running = jobs._MAX_RUNNING_JOBS
+        test_executor = ThreadPoolExecutor(max_workers=1)
+        jobs._EXECUTOR = test_executor
+        jobs._MAX_PENDING_JOBS = 1
+        jobs._MAX_RUNNING_JOBS = 1
+
+        def fake_run_agent(
+            cv: CVData,
+            message: str,
+            thread_id: str,
+            run_id: str | None = None,
+            on_tool_event: Any = None,
+            **kwargs: Any,
+        ) -> dict[str, Any]:
+            agent_started.set()
+            self.assertTrue(release_agent.wait(timeout=2))
+            if on_tool_event:
+                on_tool_event({"id": "late-tool", "name": "read_cv", "status": "completed"})
+            raise AgentCancellationError()
+
+        def submit(thread_id: str) -> Any:
+            return self.client.post(
+                "/api/agent/edit",
+                data=json.dumps(
+                    {
+                        "cv": _cv_payload(_cv_fixture()),
+                        "message": "Capacity cancel race",
+                        "thread_id": thread_id,
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        try:
+            with patch("main.jobs.run_agent", fake_run_agent):
+                first = submit("capacity-cancel-first")
+                self.assertEqual(first.status_code, 200)
+                first_job_id = first.json()["job_id"]
+                self.assertTrue(agent_started.wait(timeout=1))
+
+                cancelled = self.client.post(f"/api/agent/jobs/{first_job_id}/cancel")
+                self.assertEqual(cancelled.status_code, 200)
+                self.assertEqual(cancelled.json()["status"], "cancelled")
+
+                blocked = submit("capacity-cancel-blocked")
+                self.assertEqual(blocked.status_code, 429)
+                self.assertEqual(blocked.json()["code"], "JOB_CAPACITY_EXCEEDED")
+
+                release_agent.set()
+                self.assertEqual(self._wait_for_job(first_job_id)["status"], "cancelled")
+                for _ in range(40):
+                    with jobs._LOCK:
+                        if first_job_id not in jobs._FUTURES:
+                            break
+                    time.sleep(0.05)
+                else:
+                    self.fail("Cancelled in-flight future was not cleaned up")
+
+                self.assertFalse(
+                    any(
+                        event["type"] == "tool" and event["data"].get("id") == "late-tool"
+                        for event in jobs.list_job_events(first_job_id)
+                    )
+                )
+
+                accepted = submit("capacity-cancel-after")
+                self.assertEqual(accepted.status_code, 200)
+                self.assertEqual(
+                    self._wait_for_job(accepted.json()["job_id"])["status"],
+                    "cancelled",
+                )
+        finally:
+            release_agent.set()
+            test_executor.shutdown(wait=True)
+            jobs._EXECUTOR = original_executor
+            jobs._MAX_PENDING_JOBS = original_max_pending
+            jobs._MAX_RUNNING_JOBS = original_max_running
+
+    def test_thread_history_returns_the_newest_window_in_ascending_order(self) -> None:
+        thread_id = "long-thread"
+        jobs.ensure_thread(thread_id)
+        conn = jobs._connect()
+        for index in range(202):
+            message_id = f"message-{index:03}"
+            created_at = f"2026-01-01T00:{index // 60:02}:{index % 60:02}+00:00"
+            conn.execute(
+                """
+                INSERT INTO agent_messages (
+                    id, thread_id, role, content, parent_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message_id,
+                    thread_id,
+                    "user" if index % 2 == 0 else "assistant",
+                    f"Message {index}",
+                    f"message-{index - 1:03}" if index else None,
+                    created_at,
+                    created_at,
+                ),
+            )
+        conn.commit()
+        conn.close()
+
+        messages = jobs.list_thread_messages(thread_id, limit=200)
+        response = self.client.get(f"/api/agent/threads/{thread_id}")
+        self.assertEqual(response.status_code, 200)
+        history = response.json()["messages"]
+
+        self.assertEqual(len(history), 200)
+        self.assertEqual(history[0]["id"], "message-002")
+        self.assertEqual(history[-2]["role"], "user")
+        self.assertEqual(history[-2]["id"], "message-200")
+        self.assertEqual(history[-1]["role"], "assistant")
+        self.assertEqual(history[-1]["id"], "message-201")
+        self.assertEqual(messages[0]["parent_id"], "message-001")
 
     def test_deleted_threads_are_terminal_and_archived_threads_remain_resumable(self) -> None:
         job_started = Event()
@@ -495,12 +1125,13 @@ class AgentBackendSmokeTests(TestCase):
             if message["status"] == "failed"
         )
         raw_error = "provider credentials leaked from legacy thread history"
-        jobs.update_message_status(
-            failed_message["id"],
-            "failed",
-            content=raw_error,
-            error=raw_error,
+        conn = jobs._connect()
+        conn.execute(
+            "UPDATE agent_messages SET content = ?, error = ? WHERE id = ?",
+            (raw_error, raw_error, failed_message["id"]),
         )
+        conn.commit()
+        conn.close()
         thread: Any = self.client.get("/api/agent/threads/job-error")
         self.assertEqual(thread.status_code, 200)
         projected_message = next(
@@ -597,7 +1228,7 @@ class AgentBackendSmokeTests(TestCase):
             running_id = jobs.create_job(
                 _cv_fixture(), "Restart me too", "restart-thread"
             )
-        jobs._set_job_status(running_id, "running", run_id="interrupted-run")
+        self.assertTrue(jobs._claim_job(running_id, "interrupted-run"))
         self.assertEqual(jobs.get_job(queued_id)["status"], "queued")
         self.assertEqual(jobs.get_job(running_id)["status"], "running")
 
@@ -650,20 +1281,18 @@ class AgentBackendSmokeTests(TestCase):
     def _sse_body(self, response: Any) -> str:
         return asyncio.run(self._collect_sse(response.streaming_content))
 
-    def test_opted_in_agent_logs_redact_content_and_stay_bounded(self) -> None:
+    def test_opted_in_debug_log_redacts_content(self) -> None:
         password = "diagnostic-password"
         inert_bearer = "Bearer inert-redaction-fixture-only"
         detail = f"password is {password}; {inert_bearer}; {'x' * 500}"
-        max_chars = 160
 
         def fake_run_agent(*args: Any, **kwargs: Any) -> dict[str, Any]:
             raise RuntimeError(detail)
 
         with self.settings(
-            CV_MAKER_AGENT_LOG_CONTENT=True,
-            CV_MAKER_AGENT_LOG_CONTENT_MAX_CHARS=max_chars,
+            CV_MAKER_DEBUG_LOG=True,
         ):
-            with self.assertLogs("agent_logger", level="INFO") as logs:
+            with self.assertLogs("agent_debug_logger", level="DEBUG") as logs:
                 with patch("main.jobs.run_agent", fake_run_agent):
                     thread: Any = self.client.post(
                         "/api/agent/threads",
@@ -685,25 +1314,18 @@ class AgentBackendSmokeTests(TestCase):
                     status = self._wait_for_job(edit.json()["job_id"])
 
         output = "\n".join(logs.output)
-        content_payloads = [
-            line.rsplit(" | data=", 1)[1]
-            for line in logs.output
-            if "AGENT_CONTENT" in line
-        ]
         self.assertEqual(status["status"], "failed")
         self.assertIn("password is [REDACTED]", output)
         self.assertNotIn(password, output)
         self.assertNotIn(inert_bearer, output)
-        self.assertTrue(content_payloads)
-        self.assertTrue(any(payload.endswith("...[truncated]") for payload in content_payloads))
-        self.assertTrue(all(len(payload) <= max_chars for payload in content_payloads))
+        self.assertIn("DEBUG_FLOW", output)
 
     def _wait_for_job(self, job_id: str) -> dict[str, Any]:
         for _ in range(40):
             response = self.client.get(f"/api/agent/jobs/{job_id}")
             self.assertEqual(response.status_code, 200)
             payload = response.json()
-            if payload["status"] in {"completed", "failed"}:
+            if payload["status"] in {"completed", "failed", "cancelled"}:
                 return payload
             time.sleep(0.05)
         self.fail("Agent job did not finish.")

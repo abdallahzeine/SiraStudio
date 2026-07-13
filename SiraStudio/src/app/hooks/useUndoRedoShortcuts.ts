@@ -9,11 +9,14 @@ export function useUndoRedoShortcuts(dispatch: StoreAPI['dispatch'], history: St
       if (!shortcut) return;
 
       const isUndo = shortcut === 'undo';
-      const entry = isUndo ? history.undo() : history.redo();
-      if (!entry) return;
+      if (isUndo ? !history.canUndo : !history.canRedo) return;
 
       event.preventDefault();
-      dispatch(isUndo ? entry.inverse : entry.patches, { origin: isUndo ? 'undo' : 'redo', label: isUndo ? 'undo' : 'redo' });
+      if (isUndo) {
+        history.undo((entry) => dispatch(entry.inverse, { origin: 'undo', label: 'undo' }).success);
+      } else {
+        history.redo((entry) => dispatch(entry.patches, { origin: 'redo', label: 'redo' }).success);
+      }
     };
 
     window.addEventListener('keydown', handleKeyDown);

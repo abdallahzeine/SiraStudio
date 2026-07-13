@@ -1,4 +1,5 @@
 import { applyPatch } from './applyPatch';
+import { isValidCVData } from '../../features/saves/utils/snapshots';
 import type {
   CVDocument,
   DispatchOptions,
@@ -109,6 +110,17 @@ export function createDispatcher(store: DispatcherStore) {
         nextData = result.next;
         appliedPatches.push(current);
         inversePatches.unshift(result.inverse);
+      }
+
+      if (!isValidCVData(nextData)) {
+        return {
+          success: false,
+          error: patchError(
+            'INVALID_CV_DATA',
+            'Patch would create invalid CV data, including an empty or duplicate persistent entity ID.'
+          ),
+          appliedPatches: [],
+        };
       }
 
       store.document = {

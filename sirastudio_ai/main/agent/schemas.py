@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from ..cv_schema import CVDataInput, CVDataOutput, OptionalCVDataOutput
+from ..cv_schema import CVDataInput, OptionalCVDataOutput
 
 
 class EditRequest(BaseModel):
@@ -13,44 +13,13 @@ class EditRequest(BaseModel):
     thread_id: str = Field(
         ...,
         min_length=1,
-        description="Stable assistant conversation id used to persist memory between turns.",
+        description="Stable assistant conversation id used for jobs and chat history.",
     )
     message: str = Field(
         ...,
         description="User's editing request in natural language.",
         min_length=1,
         max_length=4000,
-    )
-    revision: int | None = Field(
-        None,
-        description="Current frontend CVDocument revision for concurrency checks.",
-    )
-    user_id: str | None = Field(
-        None,
-        description="Optional user id for persistent preferences and store namespace.",
-    )
-    checkpoint_id: str | None = Field(
-        None,
-        description="Optional checkpoint id to resume the agent run.",
-    )
-
-
-class EditResponse(BaseModel):
-    cv: CVDataOutput = Field(
-        ...,
-        description="Updated CVData JSON after the agent applied edits via tools.",
-    )
-    reply: str = Field(
-        ...,
-        description="Agent's natural language explanation of what was changed.",
-    )
-    run_id: str = Field(
-        ...,
-        description="Unique run id for the agent invocation.",
-    )
-    revision_mismatch: bool = Field(
-        False,
-        description="True if request CV revision was older than the last checkpointed revision.",
     )
 
 
@@ -71,9 +40,9 @@ class JobStatusResponse(BaseModel):
         ...,
         description="Job identifier.",
     )
-    status: Literal["queued", "running", "completed", "failed"] = Field(
+    status: Literal["queued", "running", "completed", "failed", "cancelled"] = Field(
         ...,
-        description="Job status: queued, running, completed, failed.",
+        description="Job status: queued, running, completed, failed, cancelled.",
     )
     created_at: str | None = Field(
         None,
@@ -102,10 +71,6 @@ class JobStatusResponse(BaseModel):
     run_id: str | None = Field(
         None,
         description="Run id for the agent invocation.",
-    )
-    revision_mismatch: bool | None = Field(
-        None,
-        description="True if request CV revision was older than the last checkpointed revision.",
     )
     error: str | None = Field(
         None,
@@ -146,7 +111,7 @@ class ThreadMessageResponse(BaseModel):
     thread_id: str
     role: Literal["user", "assistant", "system"]
     content: str
-    status: Literal["queued", "running", "completed", "failed"] = "completed"
+    status: Literal["completed", "failed", "cancelled"] = "completed"
     created_at: str
     updated_at: str
     job_id: str | None = None

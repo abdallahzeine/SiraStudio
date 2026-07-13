@@ -1,64 +1,71 @@
-import importlib.util
+import json
 import logging
-import os
 import re
-import sqlite3
 import uuid
+from copy import deepcopy
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Annotated, Any, Literal, cast
+from typing import Annotated, Any, Callable, Literal, cast
 
-from langchain.messages import AIMessage, AnyMessage, SystemMessage, ToolMessage
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langchain.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.runtime import Runtime
-from langgraph.store.memory import InMemoryStore
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from typing_extensions import TypedDict
 
-from ..agent_logging import log_content
+from ..agent_logging import log_debug, safe_validation_errors
+from ..cv_schema import CVData, dump_cv, parse_cv
 from .llm import get_llm
 from .prompts import (
-    FORCE_READ_PROMPT,
-    READ_TOOL_NAME,
+    REVIEW_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
-    VERIFY_AFTER_EDIT_PROMPT,
-    blocked_tool_prompt,
-    build_state_prompt,
-    too_many_tool_errors_prompt,
-    tool_error_prompt,
+    build_review_prompt,
 )
 from .tools import ALL_TOOLS
-from ..cv_schema import CVData, parse_cv
 
 
 logger = logging.getLogger("agent_logger")
 
-_CHECKPOINT_DB_PATH = Path.home() / ".cv-maker" / "agent-memory.sqlite"
-_STORE_DB_PATH = Path.home() / ".cv-maker" / "agent-store.sqlite"
-_STORE_MODE_ENV = "CV_MAKER_STORE"
-_MAX_TOOL_ERROR_RETRIES = 2
-_MAX_WORKFLOW_GUARD_PROMPTS = 2
-_EDIT_TOOL_NAMES = {"edit_cv_path"}
+READ_TOOL_NAME = "read_cv"
+EDIT_TOOL_NAME = "apply_cv_edits"
+FORCE_READ_PROMPT = "Call read_cv by itself now before editing the CV."
+AGENT_TOOLS = [tool for tool in ALL_TOOLS if tool.name in {READ_TOOL_NAME, EDIT_TOOL_NAME}]
 
 
 @dataclass
 class AgentContext:
-    user_id: str
+    on_tool_event: Callable[[dict[str, Any]], None] | None = None
 
 
 class CVGraphState(TypedDict):
     messages: Annotated[list[Any], add_messages]
     cv: dict[str, Any]
+    original_cv: dict[str, Any]
     metadata: dict[str, Any]
 
 
+class ReviewResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    complete: bool
+    missing: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def normalize_missing(self):
+        self.missing = [item.strip() for item in self.missing if item.strip()]
+        self.complete = self.complete and not self.missing
+        return self
+
+
+class AgentCancellationError(Exception):
+    """Raised internally when a running agent job is cancelled."""
+
+
 _graph = None
-_checkpointer = None
-_store = None
-_store_context: Any = None
+_base_model = None
 _model = None
+_review_model = None
 
 
 def _extract_text(content: object) -> str:
@@ -80,8 +87,9 @@ def _extract_text(content: object) -> str:
 
 def _clean_reply_text(text: str) -> str:
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
-    filtered = [p for p in paragraphs if not p.startswith(("Now I'll", "Now I\u2019ll"))]
-    return "\n\n".join(filtered).strip()
+    return "\n\n".join(
+        p for p in paragraphs if not p.startswith(("Now I'll", "Now I’ll"))
+    ).strip()
 
 
 def _extract_reply(result: dict[str, Any]) -> str:
@@ -107,38 +115,26 @@ def _get_tool_call_id(call: object) -> str | None:
 
 
 def _get_tool_calls(message: object) -> list[Any]:
-    if message is None:
-        return []
-    return getattr(message, "tool_calls", None) or []
-
-
-def _tool_names(tool_calls: list[Any]) -> list[str]:
-    return [name for name in (_get_tool_name(call) for call in tool_calls) if name]
+    return getattr(message, "tool_calls", None) or [] if message is not None else []
 
 
 def _tool_args(call: object) -> dict[str, Any]:
-    if isinstance(call, dict):
-        args = call.get("args") or {}
-    else:
-        args = getattr(call, "args", None) or {}
+    args = call.get("args") if isinstance(call, dict) else getattr(call, "args", None)
     return args if isinstance(args, dict) else {}
 
 
-def _is_tool_error(text: str) -> bool:
-    if not text:
-        return False
-    lowered = text.lower()
-    if lowered.startswith("cannot "):
-        return True
-    if lowered.startswith("invalid "):
-        return True
-    if lowered.startswith("action=") or lowered.startswith("action='"):
-        return True
-    if "requires" in lowered:
-        return True
-    if "no section matching" in lowered or "no item matching" in lowered:
-        return True
-    return False
+def _parse_tool_message(message: ToolMessage) -> tuple[Any, bool, str]:
+    text = _extract_text(getattr(message, "content", ""))
+    try:
+        payload = json.loads(text)
+    except (TypeError, ValueError):
+        payload = None
+    failed = getattr(message, "status", None) == "error"
+    if isinstance(payload, dict) and payload.get("ok") is False:
+        failed = True
+    if failed and isinstance(payload, dict) and isinstance(payload.get("error"), str):
+        return payload, True, payload["error"]
+    return payload, failed, text
 
 
 def _last_user_message(messages: list[AnyMessage]) -> AnyMessage | None:
@@ -149,405 +145,299 @@ def _last_user_message(messages: list[AnyMessage]) -> AnyMessage | None:
     return None
 
 
-def _classify_request_intent(text: str) -> str:
-    lowered = (text or "").lower()
-    destructive_words = ("delete", "remove", "clear", "wipe", "erase")
-    full_cv_words = ("replace my cv", "full cv", "entire cv", "new cv", "import")
-    rewrite_words = ("rewrite", "reword", "improve", "polish", "make it sound")
-    layout_words = ("layout", "template", "spacing", "columns", "design")
-    small_edit_words = ("add", "update", "change", "fix", "edit", "set")
-
-    if any(word in lowered for word in destructive_words):
-        return "delete_or_destructive"
-    if any(word in lowered for word in full_cv_words):
-        return "full_cv_import"
-    if any(word in lowered for word in rewrite_words):
-        return "rewrite_existing"
-    if any(word in lowered for word in layout_words):
-        return "layout_request"
-    if any(word in lowered for word in small_edit_words):
-        return "small_edit"
-    return "unclear"
+def _latest_tool_exchange(
+    messages: list[AnyMessage],
+) -> tuple[list[Any], dict[str, ToolMessage]]:
+    for index in range(len(messages) - 1, -1, -1):
+        calls = _get_tool_calls(messages[index])
+        if calls:
+            call_ids = {_get_tool_call_id(call) for call in calls}
+            results = {
+                message.tool_call_id: message
+                for message in messages[index + 1 :]
+                if isinstance(message, ToolMessage) and message.tool_call_id in call_ids
+            }
+            return calls, results
+    return [], {}
 
 
-def _load_preferences(runtime: Runtime[AgentContext] | None, user_id: str) -> str:
-    if runtime is None or runtime.store is None or not user_id:
-        return ""
-    namespace = ("preferences", user_id)
-    memories = runtime.store.search(namespace)
-    if not memories:
-        return ""
-    values = []
-    for memory in memories[-5:]:
-        value = getattr(memory, "value", None)
-        if isinstance(value, dict):
-            item = value.get("data")
-            if isinstance(item, str) and item.strip():
-                values.append(item.strip())
-    if not values:
-        return ""
-    return "User preferences:\n- " + "\n- ".join(values)
-
-
-def _store_preference(runtime: Runtime[AgentContext] | None, user_id: str, text: str) -> None:
-    if runtime is None or runtime.store is None or not user_id:
-        return
-    if not text or len(text) > 1000:
-        return
-    lowered = text.lower()
-    if "prefer" not in lowered and "preference" not in lowered and "tone" not in lowered:
-        return
-    namespace = ("preferences", user_id)
-    runtime.store.put(namespace, str(uuid.uuid4()), {"data": text.strip()})
-
-
-def _get_checkpointer():
-    global _checkpointer
-    if _checkpointer is None:
-        _CHECKPOINT_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(_CHECKPOINT_DB_PATH), check_same_thread=False)
-        _checkpointer = SqliteSaver(conn)
-        _checkpointer.setup()
-    return _checkpointer
-
-
-def _build_sqlite_store() -> Any:
-    global _store_context
-    spec = importlib.util.find_spec("langgraph.store.sqlite")
-    if spec is None:
-        return InMemoryStore()
-    from langgraph.store.sqlite import SqliteStore
-
-    _STORE_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _store_context = SqliteStore.from_conn_string(str(_STORE_DB_PATH))
-    store = _store_context.__enter__()
-    if hasattr(store, "setup"):
-        store.setup()
-    return store
-
-
-def _get_store() -> Any:
-    global _store
-    if _store is None:
-        mode = os.getenv(_STORE_MODE_ENV, "memory").lower()
-        if mode == "sqlite":
-            _store = _build_sqlite_store()
-        else:
-            _store = InMemoryStore()
-    return _store
+def _get_base_model():
+    global _base_model
+    if _base_model is None:
+        _base_model = get_llm(temperature=0)
+    return _base_model
 
 
 def _get_model():
     global _model
     if _model is None:
-        _model = get_llm(temperature=0).bind_tools(ALL_TOOLS)
+        _model = _get_base_model().bind_tools(AGENT_TOOLS, parallel_tool_calls=False)
     return _model
 
 
-def _load_state(state: CVGraphState):
-    metadata = dict(state.get("metadata") or {})
-    cv = state["cv"]
-
-    metadata["cv_read"] = False
-    metadata["verification_pending"] = False
-    metadata["verified_after_edit"] = False
-    metadata["last_tool_call_count"] = 0
-    metadata["last_tool_names"] = []
-    metadata["last_tool_errors"] = []
-    metadata["tool_error_count"] = 0
-    metadata["read_guard_count"] = 0
-    metadata["verify_guard_count"] = 0
-    metadata["blocked_tool_count"] = 0
-    metadata.pop("workflow_failed_reason", None)
-
-    last_user = _last_user_message(state.get("messages", []))
-    if last_user is not None:
-        metadata["request_intent"] = _classify_request_intent(_extract_text(getattr(last_user, "content", "")))
-
-    incoming_revision = metadata.get("input_revision")
-    if not isinstance(incoming_revision, int):
-        incoming_revision = None
-
-    previous_revision = metadata.get("revision")
-    if isinstance(incoming_revision, int):
-        if isinstance(previous_revision, int) and incoming_revision < previous_revision:
-            metadata["revision_mismatch"] = True
-            metadata["revision_expected"] = previous_revision
-            metadata["revision_received"] = incoming_revision
-        else:
-            metadata.pop("revision_mismatch", None)
-        metadata["revision"] = incoming_revision
-    else:
-        metadata.pop("revision_mismatch", None)
-
-    return {"cv": cv, "metadata": metadata}
+def _get_review_model():
+    global _review_model
+    if _review_model is None:
+        _review_model = _get_base_model().with_structured_output(
+            ReviewResult,
+            method="json_schema",
+        )
+    return _review_model
 
 
-def _route_after_load(state: CVGraphState) -> Literal["agent", "finalize"]:
-    metadata = state.get("metadata") or {}
-    if metadata.get("revision_mismatch"):
-        return "finalize"
-    return "agent"
+def _emit_progress(
+    runtime: Runtime[AgentContext], event_id: str, name: str, status: str
+) -> None:
+    callback = runtime.context.on_tool_event
+    if callback:
+        callback({"id": event_id, "name": name, "status": status})
 
 
 def _agent_node(state: CVGraphState, runtime: Runtime[AgentContext]):
-    messages = state.get("messages", [])
-    metadata = state.get("metadata") or {}
-    system_messages = [SystemMessage(content=SYSTEM_PROMPT)]
-
-    user_id = ""
-    if runtime is not None and runtime.context is not None:
-        user_id = runtime.context.user_id
+    metadata = dict(state.get("metadata") or {})
+    step = metadata.get("agent_step", 0)
+    if metadata.get("review_correction_count"):
+        phase = "fix_review"
+    elif metadata.get("successful_edits", 0):
+        phase = "prepare_response"
     else:
-        user_id = metadata.get("thread_id", "")
-
-    preferences = _load_preferences(runtime, user_id)
-    if preferences:
-        system_messages.append(SystemMessage(content=preferences))
-    system_messages.append(SystemMessage(content=build_state_prompt(metadata)))
-
-    last_user = _last_user_message(messages)
-    if last_user is not None:
-        content = getattr(last_user, "content", "")
-        if isinstance(content, str):
-            _store_preference(runtime, user_id, content)
-
-    response = _get_model().invoke(system_messages + messages)
-    return {"messages": [response]}
-
-
-def _force_read_node(state: CVGraphState):
-    metadata = dict(state.get("metadata") or {})
-    metadata["read_guard_count"] = metadata.get("read_guard_count", 0) + 1
-    return {"messages": [SystemMessage(content=FORCE_READ_PROMPT)], "metadata": metadata}
-
-
-def _force_verify_node(state: CVGraphState):
-    metadata = dict(state.get("metadata") or {})
-    metadata["verify_guard_count"] = metadata.get("verify_guard_count", 0) + 1
-    return {"messages": [SystemMessage(content=VERIFY_AFTER_EDIT_PROMPT)], "metadata": metadata}
-
-
-def _block_tools_node(state: CVGraphState):
-    metadata = dict(state.get("metadata") or {})
-    messages = state.get("messages", [])
-    last = messages[-1] if messages else None
-    tool_calls = _get_tool_calls(last)
-    names = _tool_names(tool_calls)
-    content = blocked_tool_prompt(names)
-
-    metadata["blocked_tool_count"] = metadata.get("blocked_tool_count", 0) + len(tool_calls)
-    tool_messages = []
-    for call in tool_calls:
-        call_id = _get_tool_call_id(call)
-        if call_id:
-            tool_messages.append(
-                ToolMessage(
-                    content=content,
-                    tool_call_id=call_id,
-                    name=_get_tool_name(call) or "blocked_tool",
-                )
-            )
-
-    if not tool_messages:
-        return {"messages": [SystemMessage(content=content)], "metadata": metadata}
-    return {"messages": tool_messages, "metadata": metadata}
+        phase = "plan_changes"
+    event_id = f"phase-agent-{step}"
+    _emit_progress(runtime, event_id, phase, "running")
+    try:
+        response = _get_model().invoke(
+            [SystemMessage(content=SYSTEM_PROMPT), *state.get("messages", [])],
+            config={
+                "metadata": {
+                    "phase": "agent",
+                    "thread_id": metadata.get("thread_id"),
+                    "run_id": metadata.get("run_id"),
+                }
+            },
+        )
+    except Exception:
+        _emit_progress(runtime, event_id, phase, "failed")
+        raise
+    _emit_progress(runtime, event_id, phase, "completed")
+    metadata["agent_step"] = step + 1
+    return {"messages": [response], "metadata": metadata}
 
 
 def _route_after_agent(
     state: CVGraphState,
-) -> Literal["block_tools", "force_read", "force_verify", "tools", "finalize"]:
+) -> Literal["reject_tools", "force_read", "tools", "review", "finalize"]:
     messages = state.get("messages", [])
-    if not messages:
-        return "force_read"
-
-    last = messages[-1]
+    last = messages[-1] if messages else None
     tool_calls = _get_tool_calls(last)
     metadata = state.get("metadata") or {}
 
     if tool_calls:
-        names = _tool_names(tool_calls)
-        if not metadata.get("cv_read") and any(name != READ_TOOL_NAME for name in names):
-            return "block_tools"
+        if len(tool_calls) != 1:
+            return "reject_tools"
+        if not metadata.get("cv_read") and _get_tool_name(tool_calls[0]) != READ_TOOL_NAME:
+            return "reject_tools"
         return "tools"
-
     if not metadata.get("cv_read"):
-        if metadata.get("read_guard_count", 0) >= _MAX_WORKFLOW_GUARD_PROMPTS:
-            return "finalize"
         return "force_read"
-    if metadata.get("verification_pending"):
-        if metadata.get("verify_guard_count", 0) >= _MAX_WORKFLOW_GUARD_PROMPTS:
-            return "finalize"
-        return "force_verify"
+    if metadata.get("review_correction_count"):
+        return "finalize"
+    if metadata.get("successful_edits", 0) > 0:
+        return "review"
     return "finalize"
 
 
-def _run_tools_node(state: CVGraphState):
-    tool_node = ToolNode(ALL_TOOLS)
+def _force_read_node(_: CVGraphState):
+    return {"messages": [SystemMessage(content=FORCE_READ_PROMPT)]}
+
+
+def _reject_tools_node(state: CVGraphState):
     messages = state.get("messages", [])
-    last = messages[-1] if messages else None
-    tool_calls = _get_tool_calls(last)
-    tool_names = _tool_names(tool_calls)
-
-    result = tool_node.invoke(state)
-    metadata = dict(state.get("metadata") or {})
-
-    edit_count = sum(1 for name in tool_names if name in _EDIT_TOOL_NAMES)
-    if READ_TOOL_NAME in tool_names:
-        metadata["cv_read"] = True
-        if metadata.get("verification_pending") and edit_count == 0:
-            metadata["verification_pending"] = False
-            metadata["verified_after_edit"] = True
-    if edit_count:
-        metadata["edit_tool_count"] = metadata.get("edit_tool_count", 0) + edit_count
-        metadata["verification_pending"] = True
-        metadata["verified_after_edit"] = False
-
-    metadata["last_tool_call_count"] = len(tool_calls)
-    metadata["last_tool_names"] = tool_names
-    return {**result, "metadata": metadata}
+    calls = _get_tool_calls(messages[-1] if messages else None)
+    metadata = state.get("metadata") or {}
+    if not metadata.get("cv_read"):
+        text = "Call read_cv by itself before using apply_cv_edits."
+    else:
+        text = "Call one tool at a time so CV edits are applied sequentially."
+    tool_messages = [
+        ToolMessage(
+            content=json.dumps({"ok": False, "error": text}),
+            tool_call_id=call_id,
+            name=_get_tool_name(call) or "blocked_tool",
+            status="error",
+        )
+        for call in calls
+        if (call_id := _get_tool_call_id(call))
+    ]
+    return {"messages": tool_messages or [SystemMessage(content=text)]}
 
 
 def _tool_feedback_node(state: CVGraphState):
     metadata = dict(state.get("metadata") or {})
-    count = metadata.get("last_tool_call_count", 0) or 0
-    if count <= 0:
-        return {"metadata": metadata}
+    calls, results = _latest_tool_exchange(state.get("messages", []))
+    errors: list[str] = []
 
-    messages = state.get("messages", [])
-    if len(messages) < count:
-        return {"metadata": metadata}
-
-    tool_messages = messages[-count:]
-    errors = []
-    for message in tool_messages:
-        content = getattr(message, "content", "")
-        text = content if isinstance(content, str) else str(content)
-        if _is_tool_error(text):
-            errors.append(text)
+    for call in calls:
+        result = results.get(_get_tool_call_id(call) or "")
+        if result is None:
+            continue
+        payload, failed, error = _parse_tool_message(result)
+        name = _get_tool_name(call)
+        if failed:
+            errors.append(error or f"{name or 'Tool'} failed.")
+        elif name == READ_TOOL_NAME:
+            metadata["cv_read"] = True
+        elif name == EDIT_TOOL_NAME:
+            if (
+                isinstance(payload, dict)
+                and payload.get("ok") is True
+                and isinstance(payload.get("operation_count"), int)
+                and payload["operation_count"] > 0
+            ):
+                metadata["successful_edits"] = metadata.get("successful_edits", 0) + 1
+            else:
+                errors.append("The CV edit tool returned an invalid success result.")
 
     if errors:
-        metadata["tool_error_count"] = metadata.get("tool_error_count", 0) + 1
-        metadata["last_tool_errors"] = errors
         logger.warning(
-            "AGENT_TOOL_ERROR | thread_id=%s | error_count=%d",
+            "AGENT_TOOL_ERROR | thread_id=%s | errors=%d",
             metadata.get("thread_id", ""),
             len(errors),
         )
-        log_content(
-            logger,
+        log_debug(
             "tool_error",
             thread_id=metadata.get("thread_id", ""),
             errors=errors,
         )
-        if metadata["tool_error_count"] >= _MAX_TOOL_ERROR_RETRIES:
-            metadata["workflow_failed_reason"] = "tool_errors"
-            return {"metadata": metadata}
-        return {
-            "messages": [SystemMessage(content=tool_error_prompt(errors))],
-            "metadata": metadata,
-        }
-
-    metadata["last_tool_errors"] = []
+        metadata["workflow_failed_reason"] = "tool_failed"
+        return {"metadata": metadata}
     return {"metadata": metadata}
 
 
 def _route_after_tool_feedback(state: CVGraphState) -> Literal["agent", "finalize"]:
+    if (state.get("metadata") or {}).get("workflow_failed_reason"):
+        return "finalize"
+    return "agent"
+
+
+def _review_node(state: CVGraphState, runtime: Runtime[AgentContext]):
+    metadata = dict(state.get("metadata") or {})
+    last_user = _last_user_message(state.get("messages", []))
+    request = _extract_text(getattr(last_user, "content", "")) if last_user else ""
+    event_id = f"phase-review-{metadata.get('review_correction_count', 0)}"
+    _emit_progress(runtime, event_id, "review_changes", "running")
+
+    try:
+        raw_result = _get_review_model().invoke(
+            [
+                SystemMessage(content=REVIEW_SYSTEM_PROMPT),
+                HumanMessage(content=build_review_prompt(request, state.get("cv", {}))),
+            ],
+            config={
+                "metadata": {
+                    "phase": "review",
+                    "thread_id": metadata.get("thread_id"),
+                    "run_id": metadata.get("run_id"),
+                }
+            },
+        )
+        review = (
+            raw_result
+            if isinstance(raw_result, ReviewResult)
+            else ReviewResult.model_validate(raw_result)
+        )
+    except Exception as error:
+        _emit_progress(runtime, event_id, "review_changes", "failed")
+        validation_errors = (
+            safe_validation_errors(error) if isinstance(error, ValidationError) else None
+        )
+        logger.warning(
+            "AGENT_REVIEW_ERROR | thread_id=%s | exception_type=%s | validation_errors=%s",
+            metadata.get("thread_id", ""),
+            type(error).__name__,
+            json.dumps(validation_errors, ensure_ascii=True) if validation_errors else "[]",
+        )
+        metadata["workflow_failed_reason"] = "review_failed"
+        return {"metadata": metadata}
+
+    _emit_progress(runtime, event_id, "review_changes", "completed")
+    metadata["review_complete"] = review.complete
+    metadata["review_missing"] = review.missing
+    if review.complete:
+        return {"metadata": metadata}
+
+    metadata["review_correction_count"] = 1
+    missing = review.missing or ["Complete every result in the current user request."]
+    return {
+        "messages": [
+            SystemMessage(
+                content="The completion checker found these requested results still missing:\n- "
+                + "\n- ".join(missing)
+            )
+        ],
+        "metadata": metadata,
+    }
+
+
+def _route_after_review(state: CVGraphState) -> Literal["agent", "finalize"]:
     metadata = state.get("metadata") or {}
-    if metadata.get("workflow_failed_reason"):
+    if metadata.get("review_complete") or metadata.get("workflow_failed_reason"):
         return "finalize"
     return "agent"
 
 
 def _finalize_node(state: CVGraphState):
     metadata = state.get("metadata") or {}
-    if metadata.get("revision_mismatch"):
-        expected = metadata.get("revision_expected")
-        received = metadata.get("revision_received")
-        text = "CV revision mismatch detected. Refresh the CV and retry."
-        if expected is not None and received is not None:
-            text += f" Expected revision {expected}, received {received}."
-        return {"messages": [AIMessage(content=text)]}
-    if metadata.get("workflow_failed_reason") == "tool_errors":
-        errors = metadata.get("last_tool_errors", [])
-        return {"messages": [AIMessage(content=too_many_tool_errors_prompt(errors))]}
-    if (
-        not metadata.get("cv_read")
-        and metadata.get("read_guard_count", 0) >= _MAX_WORKFLOW_GUARD_PROMPTS
-    ):
-        return {
-            "messages": [
-                AIMessage(
-                    content=(
-                        "I could not safely edit the CV because I could not inspect "
-                        "the current CV state."
-                    )
+    if not metadata.get("workflow_failed_reason"):
+        return {}
+    return {
+        "cv": deepcopy(state.get("original_cv", state.get("cv", {}))),
+        "messages": [
+            AIMessage(
+                content=(
+                    "I could not safely complete every requested CV change, so I restored the original CV."
                 )
-            ]
-        }
-    if (
-        metadata.get("verification_pending")
-        and metadata.get("verify_guard_count", 0) >= _MAX_WORKFLOW_GUARD_PROMPTS
-    ):
-        return {
-            "messages": [
-                AIMessage(
-                    content=(
-                        "The edit tools ran, but I could not complete the final "
-                        "verification pass."
-                    )
-                )
-            ]
-        }
-    return {}
+            )
+        ],
+    }
 
 
 def build_graph():
     builder = StateGraph(CVGraphState, context_schema=AgentContext)
-    builder.add_node("load_state", _load_state)
     builder.add_node("agent", _agent_node)
     builder.add_node("force_read", _force_read_node)
-    builder.add_node("force_verify", _force_verify_node)
-    builder.add_node("block_tools", _block_tools_node)
-    builder.add_node("tools", _run_tools_node)
+    builder.add_node("reject_tools", _reject_tools_node)
+    builder.add_node("tools", ToolNode(AGENT_TOOLS))
     builder.add_node("tool_feedback", _tool_feedback_node)
+    builder.add_node("review", _review_node)
     builder.add_node("finalize", _finalize_node)
 
-    builder.add_edge(START, "load_state")
-    builder.add_conditional_edges(
-        "load_state",
-        _route_after_load,
-        {
-            "agent": "agent",
-            "finalize": "finalize",
-        },
-    )
+    builder.add_edge(START, "agent")
     builder.add_conditional_edges(
         "agent",
         _route_after_agent,
         {
-            "block_tools": "block_tools",
+            "reject_tools": "reject_tools",
             "force_read": "force_read",
-            "force_verify": "force_verify",
             "tools": "tools",
+            "review": "review",
             "finalize": "finalize",
         },
     )
-    builder.add_edge("block_tools", "agent")
+    builder.add_edge("reject_tools", "agent")
     builder.add_edge("force_read", "agent")
-    builder.add_edge("force_verify", "agent")
     builder.add_edge("tools", "tool_feedback")
     builder.add_conditional_edges(
         "tool_feedback",
         _route_after_tool_feedback,
-        {
-            "agent": "agent",
-            "finalize": "finalize",
-        },
+        {"agent": "agent", "finalize": "finalize"},
+    )
+    builder.add_conditional_edges(
+        "review",
+        _route_after_review,
+        {"agent": "agent", "finalize": "finalize"},
     )
     builder.add_edge("finalize", END)
-
-    return builder.compile(checkpointer=_get_checkpointer(), store=_get_store())
+    return builder.compile()
 
 
 def _get_graph():
@@ -562,24 +452,31 @@ def run_agent(
     message: str,
     thread_id: str,
     run_id: str | None = None,
-    user_id: str | None = None,
-    checkpoint_id: str | None = None,
-    input_revision: int | None = None,
     on_tool_event: Any = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
+    should_cancel = should_cancel or (lambda: False)
+    if should_cancel():
+        raise AgentCancellationError
+
     run_id = run_id or uuid.uuid4().hex
+    input_cv = dump_cv(cv)
     inputs: CVGraphState = {
         "messages": [{"role": "user", "content": message}],
-        "cv": cv.model_dump(by_alias=True),
-        "metadata": {"thread_id": thread_id, "run_id": run_id, "input_revision": input_revision},
+        "cv": input_cv,
+        "original_cv": deepcopy(input_cv),
+        "metadata": {
+            "thread_id": thread_id,
+            "run_id": run_id,
+            "cv_read": False,
+            "successful_edits": 0,
+            "review_correction_count": 0,
+        },
     }
-    config: dict[str, Any] = {"configurable": {"thread_id": thread_id}, "recursion_limit": 100}
-    if checkpoint_id:
-        config["configurable"]["checkpoint_id"] = checkpoint_id
+    config = {"recursion_limit": 100}
 
     logger.info("AGENT_RUN_START | thread_id=%s | run_id=%s", thread_id, run_id)
-    log_content(
-        logger,
+    log_debug(
         "agent_input",
         thread_id=thread_id,
         run_id=run_id,
@@ -587,22 +484,44 @@ def run_agent(
         cv=cv,
     )
 
-    context_user = user_id or thread_id
     result: Any = inputs
     seen_tool_calls: set[str] = set()
     seen_tool_results: set[str] = set()
-    for state in _get_graph().stream(inputs, config=cast(Any, config), context=AgentContext(user_id=context_user), stream_mode="values"):
+    tool_call_names: dict[str, str] = {}
+
+    def cancellable_states():
+        states = iter(
+            _get_graph().stream(
+                inputs,
+                config=cast(Any, config),
+                context={"on_tool_event": on_tool_event},
+                stream_mode="values",
+            )
+        )
+        while True:
+            if should_cancel():
+                raise AgentCancellationError
+            try:
+                state = next(states)
+            except StopIteration:
+                return
+            if should_cancel():
+                raise AgentCancellationError
+            yield state
+
+    for state in cancellable_states():
         result = state
         for item in state.get("messages", []):
             for call in _get_tool_calls(item):
                 call_id = _get_tool_call_id(call)
                 if call_id and call_id not in seen_tool_calls:
                     seen_tool_calls.add(call_id)
+                    tool_call_names[call_id] = _get_tool_name(call) or "tool"
                     if on_tool_event:
                         on_tool_event(
                             {
                                 "id": call_id,
-                                "name": _get_tool_name(call) or "tool",
+                                "name": tool_call_names[call_id],
                                 "args": _tool_args(call),
                                 "status": "running",
                             }
@@ -611,27 +530,29 @@ def run_agent(
                 call_id = getattr(item, "tool_call_id", None)
                 if call_id and call_id not in seen_tool_results:
                     seen_tool_results.add(call_id)
-                    text = _extract_text(getattr(item, "content", ""))
+                    _, failed, summary = _parse_tool_message(item)
                     if on_tool_event:
                         on_tool_event(
                             {
                                 "id": call_id,
-                                "name": getattr(item, "name", None) or "tool",
-                                "status": "failed" if _is_tool_error(text) else "completed",
-                                "summary": text[:240],
+                                "name": getattr(item, "name", None)
+                                or tool_call_names.get(call_id, "tool"),
+                                "status": "failed" if failed else "completed",
+                                "summary": summary[:240],
                             }
                         )
 
+    if should_cancel():
+        raise AgentCancellationError
+
     reply = _extract_reply(result) or "Done."
     final_cv = result.get("cv", cv)
-    if isinstance(final_cv, CVData):
-        final_cv = final_cv.model_dump(by_alias=True)
-    else:
-        final_cv = parse_cv(final_cv).model_dump(by_alias=True)
+    final_cv = dump_cv(final_cv) if isinstance(final_cv, CVData) else dump_cv(parse_cv(final_cv))
+    metadata = result.get("metadata", {})
+    error_code = "AGENT_EDIT_FAILED" if metadata.get("workflow_failed_reason") else None
 
     logger.info("AGENT_RUN_DONE | thread_id=%s | run_id=%s", thread_id, run_id)
-    log_content(
-        logger,
+    log_debug(
         "agent_output",
         thread_id=thread_id,
         run_id=run_id,
@@ -642,5 +563,6 @@ def run_agent(
         "cv": final_cv,
         "reply": reply,
         "run_id": run_id,
-        "metadata": result.get("metadata", {}),
+        "metadata": metadata,
+        "error_code": error_code,
     }

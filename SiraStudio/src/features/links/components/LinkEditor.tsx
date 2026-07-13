@@ -1,10 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import { CircleAlert, Link as LinkIcon, X } from 'lucide-react';
 import type { SocialLink, IconType } from '../../../shared/types';
 import { IconSelector } from './IconSelector';
 import { validateUrl, extractDomain } from '../utils/linkValidation';
 import { fetchFavicon } from '../utils/faviconFetcher';
-import { detectIconTypeFromUrl, getIconByType } from '../icons';
+import { detectIconTypeFromUrl, getIconColor, LinkTypeIcon } from '../icons';
 
 interface LinkEditorProps {
   onClose: () => void;
@@ -131,10 +132,7 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
         {/* Header */}
         <div className="px-6 py-4 bg-gray-50 border-b border-gray-100 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
-            <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-                d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
-            </svg>
+            <LinkIcon size={20} className="text-[#0078D7]" />
             <h2 className="text-lg font-semibold text-gray-800">
               {isEditing ? 'Edit Link' : 'Add New Link'}
             </h2>
@@ -144,9 +142,7 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
             className="text-gray-400 hover:text-gray-600 transition-colors p-1 rounded-full hover:bg-gray-200"
             aria-label="Close modal"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
+            <X size={20} />
           </button>
         </div>
 
@@ -170,12 +166,12 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
                     focus:outline-none focus:ring-2 focus:ring-offset-0
                     ${validationError 
                       ? 'border-red-300 focus:border-red-500 focus:ring-red-200' 
-                      : 'border-gray-300 focus:border-blue-500 focus:ring-blue-200'}`}
+                      : 'border-gray-300 focus:border-[#0078D7] focus:ring-blue-200'}`}
                   autoFocus
                 />
                 {isCheckingUrl && (
                   <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                    <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                    <div className="w-4 h-4 border-2 border-[#0078D7] border-t-transparent rounded-full animate-spin" />
                   </div>
                 )}
                 {faviconUrl && !isCheckingUrl && (
@@ -188,10 +184,7 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
               </div>
               {validationError ? (
                 <p className="mt-1.5 text-xs text-red-600 flex items-center gap-1">
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} 
-                      d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
+                  <CircleAlert size={14} />
                   {validationError}
                 </p>
               ) : (
@@ -213,7 +206,7 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
                 onChange={(e) => setFormData((prev) => ({ ...prev, label: e.target.value }))}
                 placeholder="GitHub Profile"
                 className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg
-                  focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-500"
+                  focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-[#0078D7]"
               />
               <p className="mt-1.5 text-xs text-gray-500">
                 Display name for this link (auto-generated from domain if left empty)
@@ -250,7 +243,7 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
                   onChange={(e) => setFormData((prev) => ({ ...prev, color: e.target.value }))}
                   placeholder="#6B7280"
                   className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg
-                    focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-blue-500"
+                    focus:outline-none focus:ring-2 focus:ring-blue-200 focus:border-[#0078D7]"
                 />
                 {formData.color && (
                   <button
@@ -283,15 +276,12 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
                     className="flex items-center gap-2 px-3 py-2 bg-white rounded-lg border 
                       border-gray-200 hover:border-blue-300 hover:shadow-sm transition-all"
                   >
-                    {formData.iconType === 'custom' && formData.customIconUrl ? (
-                      <img src={formData.customIconUrl} alt="" className="w-5 h-5 object-contain" />
-                    ) : (
-                      <span 
-                        dangerouslySetInnerHTML={{ 
-                          __html: getIconByType(formData.iconType).svg
-                        }} 
-                      />
-                    )}
+                    <LinkTypeIcon
+                      type={formData.iconType}
+                      customIconUrl={formData.customIconUrl}
+                      size={20}
+                      color={getIconColor(formData.iconType, formData.color)}
+                    />
                     <span className="text-sm text-gray-700">
                       {formData.label || extractDomain(formData.url)}
                     </span>
@@ -314,8 +304,8 @@ export function LinkEditor({ onClose, onSave, link }: LinkEditorProps) {
             <button
               type="submit"
               disabled={!!validationError || !formData.url.trim()}
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 
-                rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500
+              className="px-4 py-2 text-sm font-medium text-white bg-[#0078D7]
+                rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-[#0078D7]
                 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isEditing ? 'Save Changes' : 'Add Link'}

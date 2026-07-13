@@ -14,7 +14,7 @@ export interface AgentThreadMessage {
   thread_id: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'completed' | 'failed' | 'cancelled';
   created_at: string;
   updated_at: string;
   job_id?: string | null;

@@ -3,16 +3,20 @@ import os
 from dotenv import load_dotenv
 from langchain_openrouter import ChatOpenRouter
 
+from ..agent_logging import OpenRouterDebugCallback, debug_logging_enabled
+
 load_dotenv()
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "minimax/minimax-m3")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = "moonshotai/kimi-k2.5"
 
 
-def get_llm(model: str | None = None, temperature: float | None = None):
+def get_llm(temperature: float | None = None):
     kwargs = {"api_key": OPENROUTER_API_KEY} if OPENROUTER_API_KEY else {}
+    callbacks = [OpenRouterDebugCallback()] if debug_logging_enabled() else None
     return ChatOpenRouter(
-        model=model or OPENROUTER_MODEL,
-        temperature=temperature if temperature is not None else 0.7,
+        model=OPENROUTER_MODEL,
+        max_retries=0,
+        callbacks=callbacks,
         **kwargs,
     )

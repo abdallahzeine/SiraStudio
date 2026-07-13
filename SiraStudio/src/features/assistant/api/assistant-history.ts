@@ -2,7 +2,7 @@ import type { ThreadHistoryAdapter, ThreadMessage } from '@assistant-ui/react';
 import { getAgentThread, type AgentThreadMessage } from './agent-threads';
 
 function toAssistantMessage(message: AgentThreadMessage): ThreadMessage | null {
-  if (message.role === 'system' || !message.content.trim()) {
+  if (message.role === 'system' || (message.role === 'user' && !message.content.trim())) {
     return null;
   }
 
@@ -21,12 +21,18 @@ function toAssistantMessage(message: AgentThreadMessage): ThreadMessage | null {
     };
   }
 
+  const status: string = message.status;
+  const isFailed = status === 'failed';
+  const isCancelled = status === 'cancelled';
+
   return {
     ...base,
     role: 'assistant',
-    content: [{ type: 'text', text: message.content }],
-    status: message.status === 'failed'
-      ? { type: 'incomplete', reason: 'error', error: message.error ?? message.content }
+    content: isFailed ? [] : [{ type: 'text', text: message.content }],
+    status: isFailed
+      ? { type: 'incomplete', reason: 'error', error: message.error || message.content }
+      : isCancelled
+        ? { type: 'incomplete', reason: 'cancelled' }
       : { type: 'complete', reason: 'stop' },
     metadata: {
       unstable_state: null,
@@ -44,8 +50,23 @@ export function createAssistantHistoryAdapter(threadId: string): ThreadHistoryAd
       let detail;
       try {
         detail = await getAgentThread(threadId);
-      } catch {
-        return { headId: null, messages: [] };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Could not load chat history.';
+        const failure: ThreadMessage = {
+          id: `history-error-${threadId}`,
+          role: 'assistant',
+          content: [],
+          status: { type: 'incomplete', reason: 'error', error: message },
+          createdAt: new Date(),
+          metadata: {
+            unstable_state: null,
+            unstable_annotations: [],
+            unstable_data: [],
+            steps: [],
+            custom: {},
+          },
+        };
+        return { headId: failure.id, messages: [{ message: failure, parentId: null }] };
       }
       const messages = detail.messages
         .map(toAssistantMessage)

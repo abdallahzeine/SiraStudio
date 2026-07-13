@@ -1,10 +1,11 @@
 import type { CVData } from '../../../shared/types';
 import type { CVDocument } from '../../../app/store/types';
+import { sanitizeRichText } from '../../../app/store/sanitize';
 import { loadCVData, saveCVData } from '../../../shared/utils/settings';
+import { builtInSectionSchemas, migrateCVData, migrateLegacyBulletEntries } from '../../../shared/utils/cvContent';
 import {
   CVDocumentAPIError,
   getCVDocument,
-  listCVDocuments,
   type SavedCVDocumentResponse,
 } from '../api/cv-documents';
 import { isValidCVData } from './snapshots';
@@ -17,6 +18,7 @@ import {
 
 const SCHEMA_VERSION = 1 as const;
 const BACKEND_LOAD_TIMEOUT_MS = 2_500;
+const MAX_BACKEND_TITLE_LENGTH = 200;
 
 interface BackendDocumentLoadOptions {
   signal?: AbortSignal;
@@ -30,6 +32,29 @@ function normalizeRevision(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : 0;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function canMigrateBackendCV(value: unknown): boolean {
+  if (!isRecord(value) || !isRecord(value.header) || !isRecord(value.template)) return false;
+
+  return typeof value.header.name === 'string' &&
+    typeof value.header.location === 'string' &&
+    typeof value.header.phone === 'string' &&
+    typeof value.header.email === 'string' &&
+    Array.isArray(value.header.socialLinks) &&
+    typeof value.template.id === 'string' &&
+    (value.template.columns === 1 || value.template.columns === 2) &&
+    Array.isArray(value.sections) &&
+    value.sections.every((section) =>
+      isRecord(section) &&
+      typeof section.type === 'string' &&
+      Object.prototype.hasOwnProperty.call(builtInSectionSchemas, section.type) &&
+      Array.isArray(section.items)
+    );
 }
 
 function timestampFromDate(value: unknown): number | null {
@@ -58,18 +83,42 @@ export function isRevisionConflictError(error: unknown): boolean {
 }
 
 export function titleForCVDocument(cv: CVData): string {
-  return cv.header.name.trim() || 'My CV';
+  const sanitizedName = sanitizeRichText(cv.header.name)
+    .replace(/<br>|<\/(?:p|li)>/gi, ' ');
+  const parsedName = new DOMParser().parseFromString(sanitizedName, 'text/html');
+  const title = (parsedName.body.textContent ?? '').replace(/\s+/g, ' ').trim() || 'My CV';
+  return Array.from(title).slice(0, MAX_BACKEND_TITLE_LENGTH).join('');
 }
 
 export function cvDocumentFromSavedResponse(response: SavedCVDocumentResponse): CVDocument | null {
-  if (!isValidCVData(response.cv)) {
+  const bulletMigrated = migrateLegacyBulletEntries(response.cv);
+  const currentData = isValidCVData(response.cv)
+    ? response.cv
+    : isValidCVData(bulletMigrated)
+      ? bulletMigrated
+      : null;
+  if (currentData) {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      revision: normalizeRevision(response.revision),
+      data: currentData,
+      meta: { lastSavedAt: timestampFromDate(response.updated_at) },
+    };
+  }
+
+  if (!canMigrateBackendCV(response.cv)) {
+    return null;
+  }
+
+  const data = migrateCVData(response.cv);
+  if (!isValidCVData(data)) {
     return null;
   }
 
   return {
     schemaVersion: SCHEMA_VERSION,
     revision: normalizeRevision(response.revision),
-    data: response.cv,
+    data,
     meta: { lastSavedAt: timestampFromDate(response.updated_at) },
   };
 }
@@ -106,45 +155,23 @@ async function loadCachedBackendDocument(options: BackendDocumentLoadOptions): P
   }
 }
 
-async function loadBackendCVDocument(
-  options: BackendDocumentLoadOptions = {}
-): Promise<CVDocument | null> {
-  const cachedDocument = await loadCachedBackendDocument(options);
-  const candidates = cachedDocument
-    ? [cachedDocument]
-    : [
-        ...listCandidateDocuments(
-          await listCVDocuments({ signal: options.signal })
-        ),
-      ];
-
-  for (const candidate of candidates) {
-    const document = cvDocumentFromSavedResponse(candidate);
-    if (!document) {
-      console.warn('[cv-maker] Ignored invalid backend CV document payload.', candidate);
-      continue;
-    }
-
-    saveSavedDocumentState(savedDocumentStateFromResponse(candidate));
-    return document;
-  }
-
-  return null;
-}
-
-function listCandidateDocuments(documents: SavedCVDocumentResponse[]): SavedCVDocumentResponse[] {
-  const mostRecent = pickMostRecentCVDocumentResponse(documents);
-  if (!mostRecent) {
-    return [];
-  }
-
-  return [mostRecent, ...documents.filter((document) => document.id !== mostRecent.id)];
-}
-
 export async function loadInitialCVDocument(
   options: InitialDocumentLoadOptions = {}
 ): Promise<CVDocument> {
   const localDocument = loadCVData();
+  const savedState = loadSavedDocumentState();
+  if (!savedState) {
+    return localDocument;
+  }
+
+  const localIsNewer = localDocument.meta.lastSavedAt !== null &&
+    savedState.updatedAt !== null &&
+    localDocument.meta.lastSavedAt > savedState.updatedAt;
+  if (savedState.dirty || localIsNewer) {
+    console.warn('[cv-maker] Kept the newer local CV draft instead of replacing it with backend data.');
+    return localDocument;
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(
     () => controller.abort(),
@@ -152,11 +179,19 @@ export async function loadInitialCVDocument(
   );
 
   try {
-    const backendDocument = await loadBackendCVDocument({ signal: controller.signal });
+    const response = await loadCachedBackendDocument({ signal: controller.signal });
+    if (!response || normalizeRevision(response.revision) <= savedState.revision) {
+      return localDocument;
+    }
+
+    const backendDocument = cvDocumentFromSavedResponse(response);
     if (backendDocument) {
+      saveSavedDocumentState(savedDocumentStateFromResponse(response));
       saveCVData(backendDocument);
       return backendDocument;
     }
+
+    console.warn('[cv-maker] Ignored invalid backend CV document payload.', response);
   } catch (error) {
     if (isAbortError(error)) {
       console.warn('[cv-maker] Backend CV document load timed out; using local draft.');

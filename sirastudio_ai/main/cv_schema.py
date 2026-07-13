@@ -1,6 +1,8 @@
+from copy import deepcopy
 from typing import Annotated, Any, Literal, TypeAlias
+from uuid import uuid4
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, ValidationError
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, ValidationError, model_validator
 
 
 class _CVBaseModel(BaseModel):
@@ -30,7 +32,6 @@ SectionType: TypeAlias = Literal[
     "awards",
     "volunteering",
     "custom",
-    "spacer",
 ]
 DateFormat: TypeAlias = Literal["MM/YYYY", "Mon YYYY", "YYYY"]
 DateSlot: TypeAlias = Literal["right-inline", "below-title", "left-margin", "hidden"]
@@ -39,8 +40,29 @@ Separator: TypeAlias = Literal["none", "rule", "dot", "space"]
 Density: TypeAlias = Literal["compact", "normal", "relaxed"]
 CustomFieldKind: TypeAlias = Literal["text", "multiline", "date", "bullets", "tags"]
 TemplateId: TypeAlias = Literal["single-column", "sidebar-left", "sidebar-right"]
-SectionFieldValue: TypeAlias = str | list[str]
 SidebarSide: TypeAlias = Literal["left", "right"]
+
+BUILT_IN_SECTION_FIELDS: dict[str, dict[str, CustomFieldKind]] = {
+    "summary": {"body": "multiline"},
+    "work-experience": {
+        "title": "text",
+        "subtitle": "text",
+        "location": "text",
+        "date": "date",
+        "bullets": "bullets",
+    },
+    "education": {"title": "text", "subtitle": "text", "date": "date"},
+    "skills": {"label": "text", "value": "text"},
+    "certifications": {"title": "text", "subtitle": "text", "date": "date"},
+    "projects": {
+        "title": "text",
+        "subtitle": "text",
+        "date": "date",
+        "bullets": "bullets",
+    },
+    "awards": {"title": "text", "subtitle": "text", "date": "date"},
+    "volunteering": {"title": "text", "role": "text", "date": "date"},
+}
 
 
 class SocialLink(_CVBaseModel):
@@ -62,20 +84,19 @@ class CVHeader(_CVBaseModel):
     socialLinks: list[SocialLink]
 
 
-class StructuredDate(_CVBaseModel):
-    month: int | None = Field(..., ge=1, le=12)
-    year: int
-
-
-class SkillGroup(_CVBaseModel):
+class BulletEntry(_CVBaseModel):
     id: str
-    label: str
-    value: str
+    text: str
+
+
+SectionFieldValue: TypeAlias = str | list[str] | list[BulletEntry]
 
 
 class CVItem(_CVBaseModel):
     id: str
     fields: dict[str, SectionFieldValue]
+    links: list[SocialLink] = Field(default_factory=list)
+    keepTogetherGroup: str | None = None
 
 
 class SectionLayout(_CVBaseModel):
@@ -98,10 +119,6 @@ class SectionFieldDef(_CVBaseModel):
 CustomFieldDef = SectionFieldDef
 
 
-class CustomSectionSchema(_CVBaseModel):
-    fields: list[SectionFieldDef]
-
-
 class SectionContent(_CVBaseModel):
     section_schema: list[SectionFieldDef] = Field(alias="schema")
     items: list[CVItem]
@@ -113,6 +130,45 @@ class CVSection(_CVBaseModel):
     title: str
     layout: SectionLayout
     content: SectionContent
+    keepTogetherGroup: str | None = None
+
+    @model_validator(mode="after")
+    def validate_content_contract(self):
+        if self.type == "summary" and len(self.content.items) != 1:
+            raise ValueError("summary section must contain exactly one item")
+
+        fields_by_key: dict[str, SectionFieldDef] = {}
+        for field in self.content.section_schema:
+            if field.key in fields_by_key:
+                raise ValueError(f"section schema contains duplicate key '{field.key}'")
+            fields_by_key[field.key] = field
+
+        canonical = BUILT_IN_SECTION_FIELDS.get(self.type)
+        if canonical is not None:
+            actual = {key: field.kind for key, field in fields_by_key.items()}
+            if actual != canonical:
+                raise ValueError(
+                    f"{self.type} section schema keys and kinds must match the canonical definition"
+                )
+
+        declared_keys = set(fields_by_key)
+        for item in self.content.items:
+            if set(item.fields) != declared_keys:
+                raise ValueError("item field keys must exactly match the section schema keys")
+
+            for key, value in item.fields.items():
+                kind = fields_by_key[key].kind
+                if kind == "bullets" and not (
+                    isinstance(value, list) and all(isinstance(entry, BulletEntry) for entry in value)
+                ):
+                    raise ValueError(f"item field '{key}' must be a list of bullet entries")
+                if kind == "tags" and not (
+                    isinstance(value, list) and all(isinstance(entry, str) for entry in value)
+                ):
+                    raise ValueError(f"item field '{key}' must be a list of strings for kind 'tags'")
+                if kind not in {"bullets", "tags"} and not isinstance(value, str):
+                    raise ValueError(f"item field '{key}' must be a string for kind '{kind}'")
+        return self
 
 
 class TemplateConfig(_CVBaseModel):
@@ -128,14 +184,77 @@ class CVData(_CVBaseModel):
     template: TemplateConfig
     dateFormat: DateFormat | None = None
 
+    @model_validator(mode="after")
+    def validate_entity_ids(self):
+        # One global namespace across sections, items, and all social links.
+        seen: dict[str, str] = {}
+
+        def claim(entity_id: str, kind: str) -> None:
+            if not isinstance(entity_id, str) or not entity_id.strip():
+                raise ValueError(f"{kind} id is empty")
+            prior = seen.get(entity_id)
+            if prior is not None:
+                raise ValueError(f"duplicate ID '{entity_id}': {kind} collides with {prior}")
+            seen[entity_id] = kind
+
+        for link in self.header.socialLinks:
+            claim(link.id, "header social link")
+        for section in self.sections:
+            claim(section.id, "section")
+            for item in section.content.items:
+                claim(item.id, "item")
+                for link in item.links:
+                    claim(link.id, "item social link")
+                fields_by_key = {field.key: field for field in section.content.section_schema}
+                for key, value in item.fields.items():
+                    if fields_by_key[key].kind == "bullets":
+                        for bullet in value:
+                            claim(bullet.id, "bullet")
+        return self
+
 
 class CVDataParseError(ValueError):
     pass
 
 
+def _migrate_legacy_bullets(value: object) -> object:
+    if not isinstance(value, dict):
+        return value
+    migrated = deepcopy(value)
+    sections = migrated.get("sections")
+    if not isinstance(sections, list):
+        return migrated
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        content = section.get("content")
+        if not isinstance(content, dict):
+            continue
+        schema = content.get("schema")
+        items = content.get("items")
+        if not isinstance(schema, list) or not isinstance(items, list):
+            continue
+        bullet_keys = {
+            field.get("key") for field in schema
+            if isinstance(field, dict) and field.get("kind") == "bullets" and isinstance(field.get("key"), str)
+        }
+        for item in items:
+            fields = item.get("fields") if isinstance(item, dict) else None
+            if not isinstance(fields, dict):
+                continue
+            for key in bullet_keys:
+                bullets = fields.get(key)
+                if isinstance(bullets, list):
+                    fields[key] = [
+                        {"id": str(uuid4()), "text": bullet} if isinstance(bullet, str) else bullet
+                        for bullet in bullets
+                    ]
+    return migrated
+
+
 def parse_cv(value: object) -> CVData:
     try:
-        return CVData.model_validate(value)
+        return CVData.model_validate(_migrate_legacy_bullets(value))
     except ValidationError as exc:
         raise CVDataParseError(_validation_error_message(exc)) from None
 
@@ -149,7 +268,7 @@ def parse_cv_field(value: object) -> CVData:
 
 
 def dump_cv(value: CVData) -> dict[str, Any]:
-    return value.model_dump(by_alias=True)
+    return value.model_dump(by_alias=True, exclude_none=True)
 
 
 def _parse_optional_cv_field(value: object) -> CVData | None:
@@ -312,6 +431,7 @@ SCAFFOLD_CV = parse_cv(SCAFFOLD_CV_FIXTURE)
 
 
 __all__ = [
+    "BulletEntry",
     "CVData",
     "CVDataInput",
     "CVDataOutput",
@@ -321,7 +441,6 @@ __all__ = [
     "CVSection",
     "CustomFieldDef",
     "CustomFieldKind",
-    "CustomSectionSchema",
     "DateFormat",
     "DateSlot",
     "Density",
@@ -336,9 +455,7 @@ __all__ = [
     "SectionLayout",
     "SectionType",
     "Separator",
-    "SkillGroup",
     "SocialLink",
-    "StructuredDate",
     "TemplateConfig",
     "TemplateId",
     "dump_cv",

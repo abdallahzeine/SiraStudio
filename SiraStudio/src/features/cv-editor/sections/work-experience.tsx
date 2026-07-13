@@ -7,7 +7,7 @@ import { BulletListPrint } from '../../print/layouts/BulletListPrint';
 import { HeadingBlockPrint } from '../../print/layouts/HeadingBlockPrint';
 import { ItemFramePrint } from '../../print/layouts/ItemFramePrint';
 import { uid } from '../../../shared/utils/helpers';
-import { builtInSectionSchemas, fieldString, fieldStringArray } from '../../../shared/utils/cvContent';
+import { builtInSectionSchemas, fieldBulletArray, fieldString } from '../../../shared/utils/cvContent';
 
 const renderWorkExperienceEditor: NonNullable<SectionDef['renderItemEditor']> = ({
   itemPath,
@@ -36,7 +36,7 @@ const renderWorkExperienceEditor: NonNullable<SectionDef['renderItemEditor']> = 
         subtitleClassName="text-gray-700 text-sm"
       />
       <BulletList
-        bullets={fieldStringArray(item, 'bullets')}
+        bullets={fieldBulletArray(item, 'bullets')}
         bulletsPath={`${itemPath}.fields.bullets`}
         iconStyle={layout.iconStyle}
       />
@@ -70,7 +70,7 @@ export const workExperienceDef: SectionDef = {
       subtitle: '',
       location: '',
       date: '',
-      bullets: [''],
+      bullets: [{ id: uid(), text: '' }],
     },
   }),
   renderItemEditor: renderWorkExperienceEditor,
@@ -89,7 +89,7 @@ export const workExperienceDef: SectionDef = {
           titleClassName="text-base font-semibold"
           subtitleClassName="text-gray-700 text-sm"
         />
-        <BulletListPrint bullets={fieldStringArray(item, 'bullets')} iconStyle={layout.iconStyle} />
+        <BulletListPrint bullets={fieldBulletArray(item, 'bullets')} iconStyle={layout.iconStyle} />
       </ItemFramePrint>
     );
   },

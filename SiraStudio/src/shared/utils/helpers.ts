@@ -1,7 +1,6 @@
 import type { SectionLayout, SectionType } from '../types';
 
-// Generate a short unique ID
-export const uid = () => Math.random().toString(36).slice(2, 9);
+export const uid = () => crypto.randomUUID();
 
 // Default SectionLayout for a given section type (matches classic preset)
 export function defaultLayoutFor(type: SectionType): SectionLayout {

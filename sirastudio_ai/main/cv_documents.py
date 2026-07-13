@@ -8,7 +8,7 @@ from ninja import Router
 from ninja.errors import HttpError
 from pydantic import BaseModel, Field, field_validator
 
-from .cv_schema import CVDataParseError, parse_cv
+from .cv_schema import CVDataParseError, dump_cv, parse_cv
 from .models import CVDocument
 
 router = Router()
@@ -35,7 +35,7 @@ class _CVDocumentBase(BaseModel):
 
 def _validate_cv_json(value: object) -> dict[str, Any]:
     try:
-        return parse_cv(value).model_dump(by_alias=True)
+        return dump_cv(parse_cv(value))
     except CVDataParseError as exc:
         raise ValueError(str(exc)) from None
 

@@ -27,8 +27,8 @@ export interface CreateHistoryOptions {
 
 export interface HistoryAPI {
   push(entry: HistoryEntry): void;
-  undo(): HistoryEntry | null;
-  redo(): HistoryEntry | null;
+  undo(replay: (entry: HistoryEntry) => boolean): boolean;
+  redo(replay: (entry: HistoryEntry) => boolean): boolean;
   reset(): void;
   readonly entries: HistoryEntry[];
   readonly current: HistoryEntry | null;
@@ -69,6 +69,10 @@ function hasSingleForwardAndInverse(entry: HistoryEntry): boolean {
   return entry.patches.length === 1 && entry.inverse.length === 1;
 }
 
+function isScalar(value: unknown): boolean {
+  return value === null || ['string', 'number', 'boolean'].includes(typeof value);
+}
+
 function canCoalesce(prev: HistoryEntry | undefined, next: HistoryEntry, windowMs: number): boolean {
   if (!prev) {
     return false;
@@ -90,7 +94,14 @@ function canCoalesce(prev: HistoryEntry | undefined, next: HistoryEntry, windowM
   const prevPatch = prev.patches[0];
   const nextPatch = next.patches[0];
 
-  return prevPatch.op === nextPatch.op && prevPatch.path === nextPatch.path;
+  if (prevPatch.path !== nextPatch.path) {
+    return false;
+  }
+
+  return (
+    (prevPatch.op === 'set' && nextPatch.op === 'set' && isScalar(prevPatch.value) && isScalar(nextPatch.value)) ||
+    (prevPatch.op === 'replace' && nextPatch.op === 'replace')
+  );
 }
 
 function mergeEntries(prev: HistoryEntry, next: HistoryEntry): HistoryEntry {
@@ -166,23 +177,32 @@ export function createHistory(options: CreateHistoryOptions = {}): HistoryAPI {
       refreshSnapshots();
     },
 
-    undo() {
+    undo(replay) {
       if (cursor < 0) {
-        return null;
+        return false;
       }
 
       const entry = entries[cursor];
+      if (!replay(entry)) {
+        return false;
+      }
+
       cursor -= 1;
-      return entry;
+      return true;
     },
 
-    redo() {
+    redo(replay) {
       if (cursor + 1 >= entries.length) {
-        return null;
+        return false;
+      }
+
+      const entry = entries[cursor + 1];
+      if (!replay(entry)) {
+        return false;
       }
 
       cursor += 1;
-      return entries[cursor];
+      return true;
     },
 
     reset() {

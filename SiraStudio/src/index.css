@@ -124,7 +124,7 @@ select:disabled {
 /* contentEditable reset */
 [contenteditable] {
   outline: none;
-  caret-color: #3b82f6;
+  caret-color: #0078d7;
   cursor: text;
 }
 
@@ -136,7 +136,7 @@ select:disabled {
 /* TipTap editor styling (replacement for contentEditable blocks) */
 .cv-text-editor .tiptap {
   outline: none;
-  caret-color: #3b82f6;
+  caret-color: #0078d7;
   cursor: text;
 }
 
@@ -217,33 +217,101 @@ select:disabled {
 
 /* ── Link Management Styles ───────────────────── */
 
-/* Smooth drag and drop animations */
 .link-dragging {
-  opacity: 0.5;
-  transform: scale(0.95);
+  opacity: 0.55;
+  transform: scale(0.96);
   cursor: grabbing;
+  z-index: 10;
 }
 
-/* Link card hover effects */
 .link-card {
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.2s ease,
+    opacity 0.2s ease;
 }
 
 .link-card:hover {
   transform: translateY(-2px);
 }
 
-/* Icon button hover animation */
 .icon-button {
-  transition: all 0.2s ease-out;
+  transition:
+    transform 0.2s ease-out,
+    background-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .icon-button:hover {
-  transform: scale(1.1);
+  transform: scale(1.08);
 }
 
 .icon-button:active {
-  transform: scale(0.95);
+  transform: scale(0.96);
+}
+
+@keyframes linkActionIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes linkConfirmPop {
+  0% {
+    transform: scale(0.85);
+  }
+  60% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.link-actions-enter {
+  animation: linkActionIn 0.18s ease-out both;
+}
+
+.link-confirm-pop {
+  animation: linkConfirmPop 0.22s ease-out both;
+}
+
+.link-action-btn {
+  transition:
+    transform 0.15s ease,
+    background-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.link-action-btn:hover {
+  transform: scale(1.06);
+}
+
+.link-action-btn:active {
+  transform: scale(0.94);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link-card,
+  .icon-button,
+  .link-action-btn,
+  .link-dragging {
+    transition: none !important;
+    animation: none !important;
+    transform: none !important;
+  }
+
+  .link-actions-enter,
+  .link-confirm-pop {
+    animation: none !important;
+  }
 }
 
 /* Modal animations */
@@ -313,7 +381,7 @@ select:disabled {
 
 /* Focus visible styles for accessibility */
 .link-focus:focus-visible {
-  outline: 2px solid #3b82f6;
+  outline: 2px solid #0078d7;
   outline-offset: 2px;
 }
 

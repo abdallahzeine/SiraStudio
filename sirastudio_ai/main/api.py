@@ -1,6 +1,5 @@
 import asyncio
 import json
-import os
 import time
 from typing import Any
 
@@ -22,9 +21,11 @@ from .agent import (
 )
 
 from .agent.llm import OPENROUTER_API_KEY
+from .agent_logging import log_debug
 from .jobs import (
     ThreadNotFoundError,
     archive_thread,
+    cancel_job,
     create_job,
     create_thread,
     delete_thread,
@@ -45,7 +46,7 @@ JsonDict = dict[str, Any]
 router = Router()
 
 _SSE_TIMEOUT_SECONDS = 120
-_SSE_POLL_SECONDS = 0.8
+_SSE_POLL_SECONDS = 0.1
 
 
 def _thread_response(record: JsonDict) -> JsonDict:
@@ -95,7 +96,9 @@ def _require_thread(thread_id: str) -> JsonDict:
 
 def _sse_event(event: str, data: JsonDict, cursor: int | None = None) -> str:
     event_id = f"id: {cursor}\n" if cursor is not None else ""
-    return f"{event_id}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    payload = f"{event_id}event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    log_debug("frontend_sse", event=event, cursor=cursor, data=data, payload=payload)
+    return payload
 
 
 def _sse_cursor(request) -> int:
@@ -113,14 +116,7 @@ def _sse_cursor(request) -> int:
 )
 def edit_cv(request, body: EditRequest):
     try:
-        job_id = create_job(
-            body.cv,
-            body.message,
-            body.thread_id,
-            body.user_id,
-            body.checkpoint_id,
-            body.revision,
-        )
+        job_id = create_job(body.cv, body.message, body.thread_id)
     except JobCapacityExceeded as error:
         return Status(429, {"code": error.code, "message": error.message})
     except ThreadNotFoundError:
@@ -181,6 +177,11 @@ def job_status(request, job_id: str) -> JsonDict:
     return job_status_payload(job_id)
 
 
+@router.post("/jobs/{job_id}/cancel", response=JobStatusResponse, summary="Cancel agent job")
+def post_job_cancel(request, job_id: str) -> JsonDict:
+    return cancel_job(job_id)
+
+
 @router.get("/jobs/{job_id}/events", summary="Stream agent job status events")
 async def job_events(request, job_id: str):
     cursor = _sse_cursor(request)
@@ -203,7 +204,7 @@ async def job_events(request, job_id: str):
                 data = job_event if job_event["type"] == "tool" else job_event["data"]
                 yield _sse_event(job_event["type"], data, last_cursor)
 
-            if status in {"completed", "failed"}:
+            if status in {"completed", "failed", "cancelled"}:
                 if not events and last_cursor == 0:
                     yield _sse_event(status, payload)
                 return
@@ -223,5 +224,4 @@ def health(request) -> dict[str, Any]:
         "jobs_db": jobs_db_available(),
         "executor": executor_available(),
         "openrouter_api_key_configured": bool(OPENROUTER_API_KEY),
-        "store_mode": os.getenv("CV_MAKER_STORE", "memory"),
     }

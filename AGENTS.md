@@ -20,6 +20,7 @@ Verify a tool's purpose before using it.
 Verify a skill's purpose before using it.
 Verify a Function's purpose before using it.
 dont try to be squidward work on thing that given to you only dont overreach and fix problems that are new or unexpected leave them.
+we are far away from production — do not prepare for prod (no DEBUG off, no secret/env hardening, no deploy/security checklist work) unless explicitly asked.
 i dont like to read two much give me summary only and only if i asked for more details give it to me.
 i dont like tests you make becasue they are just automated checks that do not reflect the real-world usage or behavior of the code.
 only tests that test full features or user flows are acceptable, and only if they are critical to the app's functionality, otherwise they should be skipped.

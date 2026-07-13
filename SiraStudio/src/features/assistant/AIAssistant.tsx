@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef } from "react";
 import { AssistantRuntimeProvider, useLocalRuntime } from "@assistant-ui/react";
 import type { CVData } from "../../shared/types";
 import { createEditCVAdapter } from "./api/agent-stream";
@@ -13,7 +13,7 @@ import {
 interface AIAssistantProps {
   cv: CVData;
   revision: number;
-  onApplyCV: (cv: CVData) => void;
+  onApplyCV: (cv: CVData) => boolean;
   onClose: () => void;
 }
 
@@ -36,16 +36,30 @@ function AssistantRuntimeShell({
   onToggleHistory,
   onThreadUpdated,
 }: AssistantRuntimeShellProps) {
+  const cvRef = useRef(cv);
+  const revisionRef = useRef(revision);
+  const onApplyCVRef = useRef(onApplyCV);
+  useLayoutEffect(() => {
+    cvRef.current = cv;
+    revisionRef.current = revision;
+    onApplyCVRef.current = onApplyCV;
+  }, [cv, revision, onApplyCV]);
+  const getCV = useCallback(() => cvRef.current, []);
+  const getRevision = useCallback(() => revisionRef.current, []);
+  const applyCV = useCallback((nextCV: CVData) => onApplyCVRef.current(nextCV), []);
+
   const adapter = useMemo(
     () =>
+      // The adapter stores these callbacks and invokes them only when a user run starts.
+      // eslint-disable-next-line react-hooks/refs
       createEditCVAdapter({
-        getCV: () => cv,
-        getRevision: () => revision,
-        onCV: onApplyCV,
+        getCV,
+        getRevision,
+        onCV: applyCV,
         getThreadId: () => threadId,
         onThreadUpdated,
       }),
-    [cv, revision, onApplyCV, threadId, onThreadUpdated],
+    [applyCV, getCV, getRevision, threadId, onThreadUpdated],
   );
 
   const historyAdapter = useMemo(
@@ -146,14 +160,14 @@ export function AIAssistant({
                 <button
                   type="button"
                   onClick={handleNewThread}
-                  className="rounded-full bg-violet-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-violet-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-700"
+                  className="rounded-full bg-[#0078D7] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0078D7]"
                 >
                   New
                 </button>
                 <button
                   type="button"
                   onClick={() => setIsHistoryOpen(false)}
-                  className="rounded-full px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-700"
+                  className="rounded-full px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-blue-50 hover:text-blue-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0078D7]"
                 >
                   Close
                 </button>
@@ -165,7 +179,7 @@ export function AIAssistant({
                 <button
                   type="button"
                   onClick={refreshThreads}
-                  className="ml-2 font-semibold underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-700"
+                  className="ml-2 font-semibold underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0078D7]"
                 >
                   Retry
                 </button>
@@ -179,7 +193,7 @@ export function AIAssistant({
                 return (
                   <div
                     key={thread.thread_id}
-                    className={`mb-2 rounded-2xl p-3 text-left transition ${isSelected ? "bg-violet-50 shadow-sm ring-2 ring-violet-200" : "bg-slate-50 hover:bg-violet-50/60"}`}
+                    className={`mb-2 rounded-2xl p-3 text-left transition ${isSelected ? "bg-blue-50 shadow-sm ring-2 ring-blue-200" : "bg-slate-50 hover:bg-blue-50/60"}`}
                   >
                     {editingThreadId === thread.thread_id ? (
                       <form
@@ -194,12 +208,12 @@ export function AIAssistant({
                           onChange={(event) =>
                             setEditingTitle(event.target.value)
                           }
-                          className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-950 outline-none focus:border-violet-700 focus:ring-2 focus:ring-violet-100"
+                          className="min-w-0 flex-1 rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-950 outline-none focus:border-[#0078D7] focus:ring-2 focus:ring-blue-100"
                           autoFocus
                         />
                         <button
                           type="submit"
-                          className="rounded-lg px-2 text-xs font-semibold text-violet-800 hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-700"
+                          className="rounded-lg px-2 text-xs font-semibold text-blue-800 hover:bg-blue-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0078D7]"
                         >
                           Save
                         </button>
@@ -212,7 +226,7 @@ export function AIAssistant({
                             selectThread(thread.thread_id);
                             setIsHistoryOpen(false);
                           }}
-                          className="block w-full rounded-xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-700"
+                          className="block w-full rounded-xl text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0078D7]"
                         >
                           <span className="block truncate text-sm font-medium text-slate-950">
                             {title}
@@ -232,21 +246,21 @@ export function AIAssistant({
                           <button
                             type="button"
                             onClick={() => beginRename(thread)}
-                            className="rounded px-1.5 py-0.5 font-medium text-slate-700 hover:bg-white hover:text-violet-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-700"
+                            className="rounded px-1.5 py-0.5 font-medium text-slate-700 hover:bg-white hover:text-blue-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0078D7]"
                           >
                             Rename
                           </button>
                           <button
                             type="button"
                             onClick={() => void handleArchive(thread.thread_id)}
-                            className="rounded px-1.5 py-0.5 font-medium text-slate-700 hover:bg-white hover:text-violet-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-700"
+                            className="rounded px-1.5 py-0.5 font-medium text-slate-700 hover:bg-white hover:text-blue-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0078D7]"
                           >
                             Archive
                           </button>
                           <button
                             type="button"
                             onClick={() => void handleDelete(thread.thread_id)}
-                            className="rounded px-1.5 py-0.5 font-medium text-red-700 hover:bg-red-50 hover:text-red-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-700"
+                            className="rounded px-1.5 py-0.5 font-medium text-red-700 hover:bg-red-50 hover:text-red-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#0078D7]"
                           >
                             Delete
                           </button>

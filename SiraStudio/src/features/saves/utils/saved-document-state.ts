@@ -4,6 +4,8 @@ export interface SavedDocumentState {
   documentId: string;
   revision: number;
   updatedAt: number | null;
+  dirty: boolean;
+  conflicted: boolean;
 }
 
 const SAVED_DOCUMENT_STATE_KEY = 'cv-maker-saved-document-state';
@@ -44,6 +46,8 @@ function normalizeSavedDocumentState(value: unknown): SavedDocumentState | null 
     documentId,
     revision,
     updatedAt: normalizeUpdatedAt(value.updatedAt),
+    dirty: value.dirty === true,
+    conflicted: value.conflicted === true,
   };
 }
 
@@ -81,5 +85,7 @@ export function savedDocumentStateFromResponse(response: SavedCVDocumentResponse
     documentId: String(response.id),
     revision: normalizeRevision(response.revision) ?? 0,
     updatedAt: Date.now(),
+    dirty: false,
+    conflicted: false,
   };
 }

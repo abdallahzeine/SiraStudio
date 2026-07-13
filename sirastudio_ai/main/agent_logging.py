@@ -1,14 +1,17 @@
 import json
 import logging
 import re
+import traceback
 from typing import Any
+
+from langchain_core.callbacks import BaseCallbackHandler
 
 from django.conf import settings
 
 
 _SECRET_FIELD_RE = re.compile(
-    r"api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|password|"
-    r"authorization|cookie|credential",
+    r"api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|"
+    r"authorization|cookie|credential|^token$",
     re.IGNORECASE,
 )
 _SECRET_ASSIGNMENT_RE = re.compile(
@@ -38,22 +41,106 @@ _KNOWN_SECRET_RE = re.compile(
     (?![A-Za-z0-9_-])
     """
 )
-_TRUNCATION_SUFFIX = "...[truncated]"
+_SAFE_VALIDATION_PATH_PART_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
+_debug_logger = logging.getLogger("agent_debug_logger")
 
 
-def log_content(logger: logging.Logger, source: str, **data: Any) -> None:
-    """Emit bounded diagnostic content only during an explicit opt-in session."""
-    if not getattr(settings, "CV_MAKER_AGENT_LOG_CONTENT", False):
+def debug_logging_enabled() -> bool:
+    return bool(getattr(settings, "CV_MAKER_DEBUG_LOG", False))
+
+
+def log_debug(source: str, **data: Any) -> None:
+    if not debug_logging_enabled():
         return
+    payload = json.dumps(
+        _redact(_jsonable(data)),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    _debug_logger.debug("DEBUG_FLOW | source=%s | data=%s", source, payload)
 
-    payload = json.dumps(_redact(data), ensure_ascii=False, default=str, separators=(",", ":"))
-    limit = getattr(settings, "CV_MAKER_AGENT_LOG_CONTENT_MAX_CHARS", 2000)
-    if not isinstance(limit, int) or limit < 1:
-        limit = 2000
-    if len(payload) > limit:
-        suffix = _TRUNCATION_SUFFIX[:limit]
-        payload = f"{payload[: limit - len(suffix)]}{suffix}"
-    logger.info("AGENT_CONTENT | source=%s | data=%s", source, payload)
+
+class OpenRouterDebugCallback(BaseCallbackHandler):
+    def on_chat_model_start(
+        self,
+        serialized: dict[str, Any],
+        messages: list[list[Any]],
+        *,
+        run_id: Any,
+        parent_run_id: Any = None,
+        tags: list[str] | None = None,
+        metadata: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        log_debug(
+            "openrouter_request",
+            callback_run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            metadata=metadata,
+            model=serialized,
+            messages=messages,
+            invocation=kwargs,
+        )
+
+    def on_llm_end(
+        self,
+        response: Any,
+        *,
+        run_id: Any,
+        parent_run_id: Any = None,
+        tags: list[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        log_debug(
+            "openrouter_response",
+            callback_run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            response=response,
+            details=kwargs,
+        )
+
+    def on_llm_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: Any,
+        parent_run_id: Any = None,
+        tags: list[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        log_debug(
+            "openrouter_error",
+            callback_run_id=run_id,
+            parent_run_id=parent_run_id,
+            tags=tags,
+            exception_type=type(error).__name__,
+            exception_detail=str(error),
+            traceback="".join(traceback.format_exception(error)),
+            details=kwargs,
+        )
+
+
+def safe_validation_errors(error: Any) -> list[dict[str, Any]]:
+    """Keep validation diagnostics useful without logging rejected input values."""
+    details = []
+    for item in error.errors(include_url=False, include_context=False, include_input=False):
+        path = [
+            part
+            if isinstance(part, int)
+            or (isinstance(part, str) and _SAFE_VALIDATION_PATH_PART_RE.fullmatch(part))
+            else "<invalid-field>"
+            for part in item.get("loc", ())
+        ]
+        details.append(
+            {
+                "path": path,
+                "type": str(item.get("type", "validation_error")),
+                "detail": _redact_text(str(item.get("msg", "Invalid value.")))[:240],
+            }
+        )
+    return details
 
 
 def _redact(value: Any) -> Any:
@@ -67,6 +154,19 @@ def _redact(value: Any) -> Any:
     if isinstance(value, str):
         return _redact_text(value)
     return value
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, list | tuple):
+        return [_jsonable(item) for item in value]
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return _jsonable(model_dump(mode="json"))
+    if value is None or isinstance(value, str | int | float | bool):
+        return value
+    return str(value)
 
 
 def _redact_text(value: str) -> str:

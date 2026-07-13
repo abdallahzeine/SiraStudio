@@ -4,11 +4,11 @@ import {
   horizontalListSortingStrategy,
   rectSortingStrategy,
 } from "@dnd-kit/sortable";
+import { Plus } from "lucide-react";
 import type { SocialLink } from "../../../shared/types";
 import { LinkCard } from "./LinkCard";
 import { LinkEditor } from "./LinkEditor";
-import { getIconByType } from "../icons";
-import { ConfirmModal } from "../../../shared/components/ConfirmModal";
+import { getIconColor, LinkTypeIcon } from "../icons";
 import { useLinkManager } from "../hooks/useLinkManager";
 
 interface LinkManagerProps {
@@ -51,25 +51,13 @@ export function LinkManager({
         <button
           onClick={handleAddLink}
           className="flex items-center justify-center w-9 h-9 rounded-full
-            bg-gray-100 hover:bg-blue-100 text-gray-400 hover:text-blue-600
+            bg-gray-100 hover:bg-blue-100 text-gray-400 hover:text-[#0078D7]
             transition-all duration-200 hover:scale-110
-            focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            focus:outline-none focus:ring-2 focus:ring-[#0078D7] focus:ring-offset-2"
           aria-label="Add new link"
           title="Add new link"
         >
-          <svg
-            className="w-5 h-5"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
+          <Plus size={20} />
         </button>
       );
     }
@@ -80,23 +68,11 @@ export function LinkManager({
           onClick={handleAddLink}
           className="no-print flex flex-col items-center justify-center p-4 rounded-xl
             border-2 border-dashed border-gray-300 hover:border-blue-400
-            text-gray-400 hover:text-blue-500 bg-gray-50 hover:bg-blue-50
+            text-gray-400 hover:text-[#0078D7] bg-gray-50 hover:bg-blue-50
             transition-all duration-200"
           aria-label="Add new link"
         >
-          <svg
-            className="w-8 h-8 mb-1"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 4v16m8-8H4"
-            />
-          </svg>
+          <Plus size={32} className="mb-1" />
           <span className="text-xs font-medium">Add Link</span>
         </button>
       );
@@ -107,23 +83,11 @@ export function LinkManager({
         onClick={handleAddLink}
         className="no-print w-full flex items-center justify-center gap-2 p-3 rounded-lg
           border-2 border-dashed border-gray-300 hover:border-blue-400
-          text-gray-400 hover:text-blue-500 bg-gray-50 hover:bg-blue-50
+          text-gray-400 hover:text-[#0078D7] bg-gray-50 hover:bg-blue-50
           transition-all duration-200"
         aria-label="Add new link"
       >
-        <svg
-          className="w-5 h-5"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M12 4v16m8-8H4"
-          />
-        </svg>
+        <Plus size={20} />
         <span className="text-sm font-medium">Add New Link</span>
       </button>
     );
@@ -137,7 +101,10 @@ export function LinkManager({
       key={link.id}
       link={link}
       onEdit={() => handleEditLink(link)}
-      onDelete={() => handleDeleteLink(link.id)}
+      onArmDelete={() => handleDeleteLink(link.id)}
+      isPendingDelete={pendingDeleteId === link.id}
+      onConfirmDelete={confirmDeleteLink}
+      onCancelDelete={cancelDeleteLink}
       layout={layout}
     />
   ));
@@ -189,38 +156,22 @@ export function LinkManager({
 
       {layout === "compact" && (
         <div className="hidden print:flex print:flex-wrap print:items-center print:justify-center print:gap-4 print:mt-2">
-          {sortedLinks.map((link) => {
-            const iconDef = getIconByType(link.iconType);
-            const iconColor = link.color || iconDef.color;
-            return (
-              <a
-                key={link.id}
-                href={link.url}
-                className="print:inline-flex print:items-center print:gap-1.5 print:text-xs"
-                style={{ color: "black !important" }}
-              >
-                {link.iconType === "custom" && link.customIconUrl ? (
-                  <img
-                    src={link.customIconUrl}
-                    alt=""
-                    className="print:w-4 print:h-4"
-                  />
-                ) : (
-                  <span
-                    className="print:w-4 print:h-4"
-                    style={{ color: iconColor }}
-                    dangerouslySetInnerHTML={{
-                      __html: iconDef.svg.replace(
-                        'class="w-5 h-5"',
-                        'width="16" height="16"',
-                      ),
-                    }}
-                  />
-                )}
-                <span style={{ color: "black" }}>{link.label}</span>
-              </a>
-            );
-          })}
+          {sortedLinks.map((link) => (
+            <a
+              key={link.id}
+              href={link.url}
+              className="print:inline-flex print:items-center print:gap-1.5 print:text-xs"
+              style={{ color: "black" }}
+            >
+              <LinkTypeIcon
+                type={link.iconType}
+                customIconUrl={link.customIconUrl}
+                size={16}
+                color={getIconColor(link.iconType, link.color)}
+              />
+              <span style={{ color: "black" }}>{link.label}</span>
+            </a>
+          ))}
         </div>
       )}
 
@@ -229,14 +180,6 @@ export function LinkManager({
           onClose={handleCloseEditor}
           onSave={handleSaveLink}
           link={editingLink}
-        />
-      )}
-      {pendingDeleteId && (
-        <ConfirmModal
-          message="Are you sure you want to delete this link?"
-          confirmLabel="Delete"
-          onConfirm={confirmDeleteLink}
-          onCancel={cancelDeleteLink}
         />
       )}
     </>

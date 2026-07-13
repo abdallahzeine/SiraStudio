@@ -59,7 +59,10 @@ export function importJSONWithResolver(
 
   const data = resolver(parsed, fmt);
   if (!data) {
-    return patchError('INVALID_IMPORT', `Unsupported payload for format "${fmt}"`);
+    return patchError(
+      'INVALID_IMPORT',
+      `Invalid ${fmt} payload: expected a valid current schema or a recognized legacy schema`
+    );
   }
 
   return dispatchImportedCVData(store, data, fmt);

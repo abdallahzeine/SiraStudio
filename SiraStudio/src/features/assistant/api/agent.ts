@@ -1,6 +1,5 @@
 import type { CVData } from '../../../shared/types';
 import { isValidCVData } from '../../saves/utils/snapshots';
-import { migrateCVData } from '../../../shared/utils/cvContent';
 
 export interface AgentEditResult {
   cv: CVData;
@@ -13,11 +12,10 @@ interface AgentJobCreateResponse {
 
 export interface AgentJobStatusResponse {
   job_id: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
   reply?: string | null;
   cv?: unknown;
   run_id?: string | null;
-  revision_mismatch?: boolean | null;
   created_at?: string | null;
   updated_at?: string | null;
   thread_id?: string | null;
@@ -35,8 +33,6 @@ export interface AgentToolEvent {
     id: string;
     name: string;
     status: 'running' | 'completed' | 'failed';
-    args?: Record<string, unknown>;
-    summary?: string;
   };
 }
 
@@ -50,52 +46,130 @@ function isToolEvent(event: AgentJobStatusResponse | AgentToolEvent): event is A
 }
 
 interface EditCVOptions {
-  revision?: number;
   signal?: AbortSignal;
   onJobStatus?: (job: AgentJobStatusResponse) => void;
 }
 
-const JOB_TIMEOUT_MS = 120_000;
+const SERVER_CANCELLED_MESSAGE = 'The assistant job was cancelled. Please try again.';
 
-async function readErrorResponse(res: Response): Promise<string> {
+export class AgentAPIError extends Error {
+  readonly status: number | null;
+  readonly code?: string;
+
+  constructor(
+    status: number | null,
+    message: string,
+    code?: string,
+  ) {
+    super(message);
+    this.name = 'AgentAPIError';
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function abortError(signal?: AbortSignal): DOMException {
+  return signal?.reason instanceof DOMException
+    ? signal.reason
+    : new DOMException('The assistant request was cancelled.', 'AbortError');
+}
+
+function serverCancelledError(job: AgentJobStatusResponse): Error {
+  const message = typeof job.error === 'string' && job.error.trim()
+    ? job.error
+    : SERVER_CANCELLED_MESSAGE;
+  return new AgentAPIError(null, message, job.error_code ?? 'CANCELLED');
+}
+
+async function readErrorResponse(res: Response): Promise<{ message: string; code?: string }> {
   const text = await res.text();
-  return text.trim() || res.statusText;
+  if (!text.trim()) {
+    return { message: res.statusText || 'Request failed.' };
+  }
+  try {
+    const body = JSON.parse(text) as Record<string, unknown>;
+    const message = [body.message, body.error, body.detail].find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    const code = [body.error_code, body.code].find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    return { message: message ?? res.statusText ?? 'Request failed.', code };
+  } catch {
+    return { message: res.statusText || 'Request failed.' };
+  }
 }
 
 async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const res = await fetch(input, init);
 
   if (!res.ok) {
-    const text = await readErrorResponse(res);
-    throw new Error(`Agent API error ${res.status}: ${text}`);
+    const error = await readErrorResponse(res);
+    throw new AgentAPIError(res.status, error.message, error.code);
   }
 
   return res.json() as Promise<T>;
 }
 
 async function createEditJob(cv: CVData, message: string, threadId: string, options: EditCVOptions = {}): Promise<string> {
-  const data = await fetchJson<AgentJobCreateResponse>('/api/agent/edit', {
+  const createPromise = fetchJson<AgentJobCreateResponse>('/api/agent/edit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    signal: options.signal,
-    body: JSON.stringify({ cv: migrateCVData(cv), message, thread_id: threadId, revision: options.revision }),
+    body: JSON.stringify({ cv, message, thread_id: threadId }),
+  }).then((data) => {
+    if (!data.job_id) {
+      throw new Error('Agent API did not return a job id.');
+    }
+    return data.job_id;
   });
 
-  if (!data.job_id) {
-    throw new Error('Agent API did not return a job id.');
+  const signal = options.signal;
+  if (!signal) {
+    return createPromise;
   }
 
-  return data.job_id;
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+
+    const settleReject = (reason: unknown) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      reject(reason);
+    };
+
+    const settleResolve = (jobId: string) => {
+      if (settled) {
+        void cancelAgentJob(jobId).catch(() => undefined);
+        return;
+      }
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      resolve(jobId);
+    };
+
+    const onAbort = () => {
+      settleReject(abortError(signal));
+    };
+
+    createPromise.then(settleResolve, settleReject);
+
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 async function getJobStatus(jobId: string, signal?: AbortSignal): Promise<AgentJobStatusResponse> {
   return fetchJson<AgentJobStatusResponse>(`/api/agent/jobs/${encodeURIComponent(jobId)}`, { signal });
 }
 
+export function cancelAgentJob(jobId: string): Promise<AgentJobStatusResponse> {
+  return fetchJson<AgentJobStatusResponse>(`/api/agent/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' });
+}
+
 function createEventQueue<T>() {
   const values: T[] = [];
-  const waiters: Array<(value: IteratorResult<T>) => void> = [];
-  const failures: Array<(reason?: unknown) => void> = [];
+  const waiters: Array<{ resolve: (value: IteratorResult<T>) => void; reject: (reason?: unknown) => void }> = [];
   let done = false;
   let error: unknown;
 
@@ -103,7 +177,7 @@ function createEventQueue<T>() {
     push(value: T) {
       const waiter = waiters.shift();
       if (waiter) {
-        waiter({ value, done: false });
+        waiter.resolve({ value, done: false });
         return;
       }
       values.push(value);
@@ -111,19 +185,19 @@ function createEventQueue<T>() {
     end() {
       done = true;
       for (const waiter of waiters.splice(0)) {
-        waiter({ value: undefined, done: true });
+        waiter.resolve({ value: undefined, done: true });
       }
     },
     fail(reason: unknown) {
       done = true;
       error = reason;
-      for (const failure of failures.splice(0)) {
-        failure(reason);
+      for (const waiter of waiters.splice(0)) {
+        waiter.reject(reason);
       }
     },
     next(): Promise<IteratorResult<T>> {
-      const value = values.shift();
-      if (value) {
+      if (values.length > 0) {
+        const value = values.shift()!;
         return Promise.resolve({ value, done: false });
       }
       if (done) {
@@ -133,8 +207,7 @@ function createEventQueue<T>() {
         return Promise.resolve({ value: undefined, done: true });
       }
       return new Promise((resolve, reject) => {
-        waiters.push(resolve);
-        failures.push(reject);
+        waiters.push({ resolve, reject });
       });
     },
   };
@@ -143,28 +216,38 @@ function createEventQueue<T>() {
 async function* streamJob(jobId: string, options: EditCVOptions = {}): AsyncGenerator<AgentJobStatusResponse | AgentToolEvent> {
   const queue = createEventQueue<AgentJobStatusResponse | AgentToolEvent>();
   if (options.signal?.aborted) {
-    throw options.signal.reason ?? new DOMException('Aborted', 'AbortError');
+    throw abortError(options.signal);
   }
 
   const source = new EventSource(`/api/agent/jobs/${encodeURIComponent(jobId)}/events`);
   let settled = false;
   let checkingStatus = false;
+  let cancelRequested = false;
 
   const finish = (callback: () => void) => {
     if (settled) {
       return;
     }
     settled = true;
-    clearTimeout(timer);
     source.close();
     callback();
+  };
+
+  const parseEvent = <T>(event: MessageEvent<string>): T | null => {
+    try {
+      return JSON.parse(event.data) as T;
+    } catch {
+      finish(() => queue.fail(new AgentAPIError(null, 'The assistant sent an invalid event. Please retry.')));
+      return null;
+    }
   };
 
   const handleJob = (event: MessageEvent<string>) => {
     if (settled) {
       return;
     }
-    const job = JSON.parse(event.data) as AgentJobStatusResponse;
+    const job = parseEvent<AgentJobStatusResponse>(event);
+    if (!job) return;
     options.onJobStatus?.(job);
     queue.push(job);
   };
@@ -173,14 +256,16 @@ async function* streamJob(jobId: string, options: EditCVOptions = {}): AsyncGene
     if (settled) {
       return;
     }
-    queue.push(JSON.parse(event.data) as AgentToolEvent);
+    const tool = parseEvent<AgentToolEvent>(event);
+    if (tool) queue.push(tool);
   };
 
   const handleCompleted = (event: MessageEvent<string>) => {
     if (settled) {
       return;
     }
-    const job = JSON.parse(event.data) as AgentJobStatusResponse;
+    const job = parseEvent<AgentJobStatusResponse>(event);
+    if (!job) return;
     options.onJobStatus?.(job);
     queue.push(job);
     finish(queue.end);
@@ -190,10 +275,24 @@ async function* streamJob(jobId: string, options: EditCVOptions = {}): AsyncGene
     if (settled) {
       return;
     }
-    const job = JSON.parse(event.data) as AgentJobStatusResponse;
+    const job = parseEvent<AgentJobStatusResponse>(event);
+    if (!job) return;
     options.onJobStatus?.(job);
     queue.push(job);
-    finish(() => queue.fail(new Error(job.error || 'Agent job failed.')));
+    finish(() => queue.fail(new AgentAPIError(null, job.error || 'Agent job failed.', job.error_code ?? undefined)));
+  };
+
+  const handleCancelled = (event: MessageEvent<string>) => {
+    if (settled) return;
+    const job = parseEvent<AgentJobStatusResponse>(event);
+    if (!job) return;
+    options.onJobStatus?.(job);
+    queue.push(job);
+    if (options.signal?.aborted) {
+      finish(() => queue.fail(abortError(options.signal)));
+      return;
+    }
+    finish(() => queue.fail(serverCancelledError(job)));
   };
 
   const checkJobStatus = async () => {
@@ -207,6 +306,8 @@ async function* streamJob(jobId: string, options: EditCVOptions = {}): AsyncGene
         handleCompleted({ data: JSON.stringify(job) } as MessageEvent<string>);
       } else if (job.status === 'failed') {
         handleFailed({ data: JSON.stringify(job) } as MessageEvent<string>);
+      } else if (job.status === 'cancelled') {
+        handleCancelled({ data: JSON.stringify(job) } as MessageEvent<string>);
       } else {
         options.onJobStatus?.(job);
       }
@@ -217,47 +318,49 @@ async function* streamJob(jobId: string, options: EditCVOptions = {}): AsyncGene
     }
   };
 
-  const timer = setTimeout(() => {
-    void (async () => {
-      const job = await getJobStatus(jobId).catch(() => null);
-      if (settled) {
-        return;
-      }
-      if (job?.status === 'completed') {
-        handleCompleted({ data: JSON.stringify(job) } as MessageEvent<string>);
-        return;
-      }
-      if (job?.status === 'failed') {
-        handleFailed({ data: JSON.stringify(job) } as MessageEvent<string>);
-        return;
-      }
-      finish(() => queue.fail(new Error('Agent job did not finish in time.')));
-    })();
-  }, JOB_TIMEOUT_MS);
-
-  options.signal?.addEventListener('abort', () => {
-    finish(() => queue.fail(options.signal?.reason ?? new DOMException('Aborted', 'AbortError')));
-  }, { once: true });
+  const handleAbort = () => {
+    if (!cancelRequested) {
+      cancelRequested = true;
+      void cancelAgentJob(jobId).catch(() => undefined);
+    }
+    finish(() => queue.fail(abortError(options.signal)));
+  };
+  options.signal?.addEventListener('abort', handleAbort, { once: true });
 
   source.addEventListener('job', handleJob);
   source.addEventListener('tool', handleTool);
   source.addEventListener('completed', handleCompleted);
   source.addEventListener('failed', handleFailed);
+  source.addEventListener('cancelled', handleCancelled);
   source.onerror = () => {
     void checkJobStatus();
   };
 
-  while (true) {
-    const item = await queue.next();
-    if (item.done) {
-      return;
+  try {
+    while (true) {
+      const item = await queue.next();
+      if (item.done) {
+        return;
+      }
+      yield item.value;
     }
-    yield item.value;
+  } finally {
+    source.close();
+    options.signal?.removeEventListener('abort', handleAbort);
+    source.removeEventListener('job', handleJob);
+    source.removeEventListener('tool', handleTool);
+    source.removeEventListener('completed', handleCompleted);
+    source.removeEventListener('failed', handleFailed);
+    source.removeEventListener('cancelled', handleCancelled);
   }
 }
 
 export async function* editCVEvents(cv: CVData, message: string, threadId: string, options: EditCVOptions = {}): AsyncGenerator<AgentEditEvent> {
   const jobId = await createEditJob(cv, message, threadId, options);
+  if (options.signal?.aborted) {
+    await cancelAgentJob(jobId).catch(() => undefined);
+    throw abortError(options.signal);
+  }
   let terminalJob: AgentJobStatusResponse | null = null;
 
   for await (const event of streamJob(jobId, options)) {
@@ -280,17 +383,12 @@ export async function* editCVEvents(cv: CVData, message: string, threadId: strin
 }
 
 function completedJobToEditResponse(job: AgentJobStatusResponse): AgentEditResult {
-  if (job.revision_mismatch) {
-    throw new Error(job.reply || 'CV changed while the agent was editing. Refresh and try again.');
-  }
-
   if (!isValidCVData(job.cv)) {
     throw new Error('Agent completed without returning valid CV data.');
   }
 
   return {
-    cv: migrateCVData(job.cv),
+    cv: job.cv,
     reply: typeof job.reply === 'string' && job.reply.trim() ? job.reply : 'Done.',
   };
 }
-

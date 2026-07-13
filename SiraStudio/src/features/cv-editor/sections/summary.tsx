@@ -1,17 +1,20 @@
 import type { SectionDef } from './registry';
 import { classicLayouts, professionalLayouts } from '../presets';
 import { BodyBlock } from '../layouts/BodyBlock';
+import { ItemFrame } from '../layouts/ItemFrame';
 import { BodyBlockPrint } from '../../print/layouts/BodyBlockPrint';
 import { ItemFramePrint } from '../../print/layouts/ItemFramePrint';
 import { uid } from '../../../shared/utils/helpers';
 import { builtInSectionSchemas, fieldString } from '../../../shared/utils/cvContent';
 
-const renderSummaryEditor: NonNullable<SectionDef['renderItemEditor']> = ({ itemPath, item }) => (
-  <BodyBlock
-    value={fieldString(item, 'body')}
-    path={`${itemPath}.fields.body`}
-    placeholder="Write your professional summary..."
-  />
+const renderSummaryEditor: NonNullable<SectionDef['renderItemEditor']> = ({ itemPath, item, layout, index, total, onMove, onDelete }) => (
+  <ItemFrame itemId={item.id} density={layout.density} index={index} total={total} onMove={onMove} onDelete={onDelete} path={itemPath} hideControls>
+    <BodyBlock
+      value={fieldString(item, 'body')}
+      path={`${itemPath}.fields.body`}
+      placeholder="Write your professional summary..."
+    />
+  </ItemFrame>
 );
 
 export const summaryDef: SectionDef = {

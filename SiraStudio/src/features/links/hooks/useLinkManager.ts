@@ -19,6 +19,7 @@ export function useLinkManager({ links, onAdd, onUpdate, onDelete, onReorder }: 
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
+    setPendingDeleteId(null);
 
     if (over && active.id !== over.id) {
       const oldIndex = links.findIndex((link) => link.id === active.id);
@@ -31,11 +32,13 @@ export function useLinkManager({ links, onAdd, onUpdate, onDelete, onReorder }: 
   }, [links, onReorder]);
 
   const handleAddLink = () => {
+    setPendingDeleteId(null);
     setEditingLink(null);
     setIsEditorOpen(true);
   };
 
   const handleEditLink = (link: SocialLink) => {
+    setPendingDeleteId(null);
     setEditingLink(link);
     setIsEditorOpen(true);
   };

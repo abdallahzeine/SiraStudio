@@ -122,7 +122,7 @@ function CanvasCustomSectionPreview({ title, schema }: { title: string; schema: 
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-gray-100">
       <div className="flex items-center justify-between gap-2 border-b border-gray-200 bg-white px-3 py-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-violet-600">CV canvas preview</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-[#0078D7]">CV canvas preview</p>
         <p className="text-[11px] text-gray-400">Same editors as the real CV — try typing</p>
       </div>
       <div className="p-3 sm:p-4">
@@ -255,16 +255,16 @@ export function AddSectionModal({ open, onClose, onCreate }: AddSectionModalProp
                 type="button"
                 autoFocus={definition.type === 'summary'}
                 onClick={() => handleSelect(definition.type)}
-                className={`rounded-xl border p-4 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-violet-300 ${
+                className={`rounded-xl border p-4 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-blue-300 ${
                   definition.type === 'custom'
-                    ? 'border-violet-300 bg-violet-50 hover:border-violet-400 hover:bg-violet-100'
-                    : 'border-gray-200 hover:border-violet-300 hover:bg-violet-50'
+                    ? 'border-blue-300 bg-blue-50 hover:border-blue-400 hover:bg-blue-100'
+                    : 'border-gray-200 hover:border-blue-300 hover:bg-blue-50'
                 }`}
               >
                 <span className="block text-sm font-semibold text-gray-800">{definition.label}</span>
                 <span className="mt-1 block text-xs leading-relaxed text-gray-500">{definition.description}</span>
                 {definition.type === 'custom' && (
-                  <span className="mt-2 inline-block text-xs font-medium text-violet-700">You choose the fields →</span>
+                  <span className="mt-2 inline-block text-xs font-medium text-blue-700">You choose the fields →</span>
                 )}
               </button>
             ))}
@@ -281,8 +281,8 @@ export function AddSectionModal({ open, onClose, onCreate }: AddSectionModalProp
           <div className="min-h-0 flex-1 overflow-y-auto p-5">
             <div className="space-y-5">
                 <ol className="flex flex-wrap gap-2 text-xs font-medium text-gray-500">
-                  <li className="rounded-full bg-violet-100 px-2.5 py-1 text-violet-700">1. Name section</li>
-                  <li className="rounded-full bg-violet-100 px-2.5 py-1 text-violet-700">2. Add fields</li>
+                  <li className="rounded-full bg-blue-100 px-2.5 py-1 text-blue-700">1. Name section</li>
+                  <li className="rounded-full bg-blue-100 px-2.5 py-1 text-blue-700">2. Add fields</li>
                   <li className="rounded-full bg-gray-100 px-2.5 py-1">3. Create</li>
                 </ol>
 
@@ -298,7 +298,7 @@ export function AddSectionModal({ open, onClose, onCreate }: AddSectionModalProp
                     value={title}
                     onChange={(event) => setTitle(event.target.value)}
                     placeholder="e.g. PUBLICATIONS"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-200"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm text-gray-800 focus:border-[#0078D7] focus:outline-none focus:ring-2 focus:ring-blue-200"
                   />
                 </div>
 
@@ -313,7 +313,7 @@ export function AddSectionModal({ open, onClose, onCreate }: AddSectionModalProp
                     <button
                       type="button"
                       onClick={() => setFields((current) => [...current, newField('text')])}
-                      className="shrink-0 rounded-lg border border-violet-200 bg-white px-3 py-1.5 text-xs font-medium text-violet-700 transition-colors hover:bg-violet-50 focus:outline-none focus:ring-2 focus:ring-violet-300"
+                      className="shrink-0 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-300"
                     >
                       + Add field
                     </button>
@@ -352,7 +352,7 @@ export function AddSectionModal({ open, onClose, onCreate }: AddSectionModalProp
                             className={`w-full rounded-lg border bg-white px-3 py-2 text-sm text-gray-800 focus:outline-none focus:ring-2 ${
                               error
                                 ? 'border-red-300 focus:border-red-400 focus:ring-red-100'
-                                : 'border-gray-300 focus:border-violet-500 focus:ring-violet-200'
+                                : 'border-gray-300 focus:border-[#0078D7] focus:ring-blue-200'
                             }`}
                           />
                           {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
@@ -366,9 +366,9 @@ export function AddSectionModal({ open, onClose, onCreate }: AddSectionModalProp
                                   key={kind.value}
                                   type="button"
                                   onClick={() => updateFieldKind(field, kind.value)}
-                                  className={`rounded-lg border px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-violet-300 ${
+                                  className={`rounded-lg border px-3 py-2 text-left transition-colors focus:outline-none focus:ring-2 focus:ring-blue-300 ${
                                     selected
-                                      ? 'border-violet-400 bg-violet-50 ring-1 ring-violet-200'
+                                      ? 'border-blue-400 bg-blue-50 ring-1 ring-blue-200'
                                       : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                                   }`}
                                 >
@@ -406,7 +406,7 @@ export function AddSectionModal({ open, onClose, onCreate }: AddSectionModalProp
                 type="submit"
                 disabled={!canCreate}
                 aria-describedby="custom-section-help"
-                className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-700 focus:outline-none focus:ring-2 focus:ring-violet-300 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-lg bg-[#0078D7] px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-300 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Create section
               </button>

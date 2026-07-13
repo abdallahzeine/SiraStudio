@@ -1,7 +1,6 @@
 from .core import run_agent
 from .schemas import (
     EditRequest,
-    EditResponse,
     JobCapacityErrorResponse,
     JobCreateResponse,
     JobStatusResponse,
@@ -15,7 +14,6 @@ from .schemas import (
 __all__ = [
     "run_agent",
     "EditRequest",
-    "EditResponse",
     "JobCapacityErrorResponse",
     "JobCreateResponse",
     "JobStatusResponse",

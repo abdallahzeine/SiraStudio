@@ -14,3 +14,7 @@ from django.core.wsgi import get_wsgi_application
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'sirastudio_ai.settings')
 
 application = get_wsgi_application()
+
+from main.jobs import recover_interrupted_jobs
+
+recover_interrupted_jobs()

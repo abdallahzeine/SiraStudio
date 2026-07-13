@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { CVData } from '../../../shared/types';
-import { saveCVDocument } from '../api/cv-documents';
+import { getCVDocument, saveCVDocument } from '../api/cv-documents';
 import {
   isRevisionConflictError,
   titleForCVDocument,
@@ -56,14 +56,22 @@ export function useBackendDocumentAutosave(cv: CVData, localRevision: number): v
     }
 
     pendingRef.current = { cv };
+    if (savedStateRef.current) {
+      savedStateRef.current = { ...savedStateRef.current, dirty: true };
+      saveSavedDocumentState(savedStateRef.current);
+    }
 
     const savePending = async (): Promise<void> => {
-      if (stoppedRef.current || isSavingRef.current || !pendingRef.current) {
+      if (
+        stoppedRef.current ||
+        isSavingRef.current ||
+        !pendingRef.current ||
+        savedStateRef.current?.conflicted
+      ) {
         return;
       }
 
       const pending = pendingRef.current;
-      pendingRef.current = null;
       isSavingRef.current = true;
 
       const controller = new AbortController();
@@ -82,17 +90,38 @@ export function useBackendDocumentAutosave(cv: CVData, localRevision: number): v
           { signal: controller.signal }
         );
 
-        const nextSavedState = savedDocumentStateFromResponse(response);
+        const hasNewerPending = pendingRef.current !== pending;
+        const nextSavedState = {
+          ...savedDocumentStateFromResponse(response),
+          dirty: hasNewerPending,
+        };
         savedStateRef.current = nextSavedState;
         saveSavedDocumentState(nextSavedState);
+        if (!hasNewerPending) {
+          pendingRef.current = null;
+        }
       } catch (error) {
         if (isAbortError(error)) {
           return;
         }
 
         if (isRevisionConflictError(error)) {
+          const savedState = savedStateRef.current;
+          if (savedState) {
+            try {
+              const current = await getCVDocument(savedState.documentId, { signal: controller.signal });
+              savedStateRef.current = {
+                ...savedDocumentStateFromResponse(current),
+                dirty: true,
+                conflicted: true,
+              };
+            } catch {
+              savedStateRef.current = { ...savedState, dirty: true, conflicted: true };
+            }
+            saveSavedDocumentState(savedStateRef.current);
+          }
           console.warn(
-            '[cv-maker] Backend CV autosave conflict; local edits were kept in the draft cache and were not overwritten.',
+            '[cv-maker] Backend CV autosave conflict; local edits were kept in the draft cache and automatic backend saves were paused to avoid overwriting concurrent edits.',
             error
           );
           return;
@@ -106,7 +135,7 @@ export function useBackendDocumentAutosave(cv: CVData, localRevision: number): v
         isSavingRef.current = false;
         saveControllerRef.current = null;
 
-        if (pendingRef.current && !stoppedRef.current) {
+        if (pendingRef.current && pendingRef.current !== pending && !stoppedRef.current) {
           saveTimerRef.current = setTimeout(() => {
             saveTimerRef.current = null;
             void savePending();

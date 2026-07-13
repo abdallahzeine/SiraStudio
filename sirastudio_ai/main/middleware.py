@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 from django.http import JsonResponse
 
-from .agent_logging import log_content
+from .agent_logging import log_debug
 
 logger = logging.getLogger("agent_logger")
 
@@ -48,24 +48,46 @@ class AgentLoggingMiddleware:
                 duration_ms,
                 type(error).__name__,
             )
-            log_content(
-                logger,
-                "http_exception",
+            log_debug(
+                "frontend_http_error",
+                method=request.method,
+                path=request.get_full_path(),
+                headers=dict(request.headers),
                 request=request_body,
                 exception_type=type(error).__name__,
                 exception_detail=str(error),
+                duration_ms=duration_ms,
             )
             raise
 
         duration_ms = (time.monotonic() - start) * 1000
         if getattr(response, "streaming", False):
             _log_request(timestamp, request.path, thread_id, response.status_code, duration_ms, {})
-            log_content(logger, "http", request=request_body)
+            log_debug(
+                "frontend_http_stream",
+                method=request.method,
+                path=request.get_full_path(),
+                headers=dict(request.headers),
+                request=request_body,
+                status=response.status_code,
+                response_headers=dict(response.headers),
+                duration_ms=duration_ms,
+            )
             return response
 
         response_body = _parse_json(response.content) if response.content else {}
         _log_request(timestamp, request.path, thread_id, response.status_code, duration_ms, response_body)
-        log_content(logger, "http", request=request_body, response=response_body)
+        log_debug(
+            "frontend_http",
+            method=request.method,
+            path=request.get_full_path(),
+            headers=dict(request.headers),
+            request=request_body,
+            status=response.status_code,
+            response_headers=dict(response.headers),
+            response=response_body,
+            duration_ms=duration_ms,
+        )
 
         return response
 
